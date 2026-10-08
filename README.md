@@ -43,3 +43,5 @@ Some OCI deletions take time; rerun **Destroy** to check or finish cleanup.
 
 For credential problems, update GitHub Secrets and rerun **Deploy** for an active
 demo, or **Destroy** if removal is underway.
+
+Licensed under [MIT](LICENSE).
