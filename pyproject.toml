@@ -1,0 +1,21 @@
+[project]
+name = "oci-application-troubleshooter"
+version = "0.0.0"
+description = "Deployment policy for the OCI application troubleshooting demo"
+requires-python = ">=3.12,<3.13"
+license = "MIT"
+dependencies = []
+
+[dependency-groups]
+dev = ["coverage==7.16.2"]
+
+[tool.uv]
+package = false
+
+[tool.coverage.run]
+branch = true
+source = ["troubleshooter_deployment"]
+data_file = ".cache/coverage/.coverage"
+
+[tool.coverage.report]
+show_missing = true
