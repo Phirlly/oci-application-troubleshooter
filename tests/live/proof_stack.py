@@ -46,8 +46,7 @@ class ProofStack:
                 or any(type(data.get(k)) is not type(v) or data[k] != v for k, v in required.items())
                 or type(data.get("configSource")) is not dict
                 or data["configSource"].get("configSourceType") != "ZIP_UPLOAD"
-                or "workingDirectory" not in data["configSource"]
-                or data["configSource"]["workingDirectory"] not in ("", None)
+                or data["configSource"].get("workingDirectory") not in ("", None)
                 or type(data.get("variables")) is not dict):
             raise StackError()
         identifier = require_text(data.get("id"), r"[A-Za-z0-9_.:-]{1,256}")

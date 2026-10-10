@@ -338,15 +338,17 @@ class ProofStackTests(unittest.TestCase):
             self.stack.delete(self.state)
         self.assertNotIn("secret", str(error.exception))
 
-    def test_documented_null_root_directory_is_accepted_but_missing_or_nested_is_not(self):
-        for root in ("", None):
+    def test_optional_root_directory_is_accepted_but_nested_or_wrong_type_is_not(self):
+        for source in ({"configSourceType": "ZIP_UPLOAD"},
+                       {"configSourceType": "ZIP_UPLOAD", "workingDirectory": ""},
+                       {"configSourceType": "ZIP_UPLOAD", "workingDirectory": None}):
             data = self.data()
-            data["configSource"]["workingDirectory"] = root
+            data["configSource"] = source
             self.send.side_effect = [response(data), response(data)]
             self.assertEqual(self.stack.create(self.state), "synthetic-stack")
             self.stack.check(self.state)
-        for source in ({"configSourceType": "ZIP_UPLOAD"},
-                       {"configSourceType": "ZIP_UPLOAD", "workingDirectory": "nested"}):
+        for root in ("nested", False, 0, [], {}):
+            source = {"configSourceType": "ZIP_UPLOAD", "workingDirectory": root}
             self.send.side_effect = [response(dict(self.data(), configSource=source))]
             with self.assertRaises(StackError):
                 self.stack.check(self.state)
