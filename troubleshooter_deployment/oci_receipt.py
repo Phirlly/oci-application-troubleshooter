@@ -6,14 +6,13 @@ receipt first. This adapter does not discover/create stacks or delete data.
 import json
 import re
 
-from oci.circuit_breaker import NoCircuitBreakerStrategy
 from oci.exceptions import ServiceError
-from oci.resource_manager import ResourceManagerClient
 from oci.resource_manager.models import UpdateStackDetails
 from oci.retry import NoneRetryStrategy
 
 from .codec import MAX_BYTES, encode, validate_identity
-from .oci_transport import BoundedOciSession, oci_operation, strong_etag
+from .oci_client import bounded_client
+from .oci_transport import oci_operation, strong_etag
 from .receipt_variables import merge_receipt, read_receipt
 
 
@@ -36,22 +35,9 @@ class OciReceiptStore:
     def __init__(self, config, identity, stack_id):
         try:
             validate_identity(identity)
-            if (type(config) is not dict or set(config) != {"tenancy", "user", "fingerprint", "region", "key_content"}
-                    or config["tenancy"] != identity.scope.tenancy_id or config["region"] != identity.scope.region
-                    or any(type(value) is not str or not value for value in config.values())
-                    or type(stack_id) is not str or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,256}", stack_id)):
+            if type(stack_id) is not str or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,256}", stack_id):
                 raise ReceiptError()
-            origin = f"https://resourcemanager.{identity.scope.region}.oraclecloud.com"
-            self._client = ResourceManagerClient(
-                dict(config), service_endpoint=origin, retry_strategy=NoneRetryStrategy(), timeout=(5, 5),
-                circuit_breaker_strategy=NoCircuitBreakerStrategy(), enable_strict_url_encoding=True,
-                skip_deserialization=True,
-                client_level_realm_specific_endpoint_template_enabled=False,
-                client_level_dualstack_endpoints_enabled=False,
-            )
-            self._client.base_client.session.close()
-            self._client.base_client.session = BoundedOciSession(origin)
-            self._client.base_client.logger.disabled = True
+            self._client = bounded_client(config, identity.scope, "resourcemanager")
         except Exception:
             raise ReceiptError() from None
         self._identity, self._stack_id = identity, stack_id

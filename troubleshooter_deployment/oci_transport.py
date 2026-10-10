@@ -98,4 +98,10 @@ class BoundedOciSession(Session):
         kwargs.update(allow_redirects=False, stream=True, verify=True, timeout=(5, 5), proxies={},
                       hooks={"response": [_bounded_response]})
         kwargs["headers"] = dict(kwargs.get("headers") or {}, **{"Accept-Encoding": "identity"})
-        return super().request(method, url, **kwargs)
+        result = super().request(method, url, **kwargs)
+        # GetNamespace's SDK string special case preserves non-string JSON as
+        # text even with skip_deserialization. Check the bounded wire value.
+        if method == "GET" and parsed.path == "/n" and 200 <= result.status_code < 300:
+            if type(json.loads(result.content)) is not str:
+                raise TransportError()
+        return result

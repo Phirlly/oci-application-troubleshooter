@@ -5,14 +5,13 @@ privileged principal. Bootstrap and live IAM proof remain separate gates.
 """
 import re
 
-from oci.circuit_breaker import NoCircuitBreakerStrategy
 from oci.exceptions import ServiceError
-from oci.object_storage import ObjectStorageClient
 from oci.retry import NoneRetryStrategy
 
 from .codec import decode, validate_identity
 from .journal import WriteConflict, WriteUncertain
-from .oci_transport import BoundedOciSession, oci_operation as _operation, strong_etag as _etag
+from .oci_client import bounded_client
+from .oci_transport import oci_operation as _operation, strong_etag as _etag
 
 
 class StoreError(RuntimeError):
@@ -24,23 +23,10 @@ class OciJournalStore:
     def __init__(self, config, identity, namespace, bucket):
         try:
             validate_identity(identity)
-            if (type(config) is not dict or set(config) != {"tenancy", "user", "fingerprint", "region", "key_content"}
-                    or config["tenancy"] != identity.scope.tenancy_id or config["region"] != identity.scope.region
-                    or any(type(value) is not str or not value for value in config.values())
-                    or any(type(value) is not str or not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", value)
-                           for value in (namespace, bucket))):
+            if any(type(value) is not str or not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", value)
+                   for value in (namespace, bucket)):
                 raise StoreError()
-            origin = f"https://objectstorage.{identity.scope.region}.oraclecloud.com"
-            self._client = ObjectStorageClient(
-                dict(config), service_endpoint=origin, retry_strategy=NoneRetryStrategy(), timeout=(5, 5),
-                circuit_breaker_strategy=NoCircuitBreakerStrategy(), enable_strict_url_encoding=True,
-                skip_deserialization=True,
-                client_level_realm_specific_endpoint_template_enabled=False,
-                client_level_dualstack_endpoints_enabled=False,
-            )
-            self._client.base_client.session.close()
-            self._client.base_client.session = BoundedOciSession(origin)
-            self._client.base_client.logger.disabled = True
+            self._client = bounded_client(config, identity.scope, "objectstorage")
         except Exception:
             raise StoreError() from None
         self._identity, self._namespace, self._bucket = identity, namespace, bucket

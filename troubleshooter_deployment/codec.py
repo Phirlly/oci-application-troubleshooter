@@ -55,13 +55,24 @@ def _attempt(value):
                    _text(data["source_sha"], r"[0-9a-f]{40}"))
 
 
+def _scope(value):
+    scope = _fields(value, Scope)
+    return Scope(_positive(scope["repository_id"]),
+                 _text(scope["environment"], r"[a-z0-9][a-z0-9_-]{0,62}"),
+                 _text(scope["tenancy_id"]), _text(scope["compartment_id"]),
+                 _text(scope["region"], r"[a-z0-9-]{1,64}"))
+
+
+def validate_scope(scope):
+    try:
+        _require(type(scope) is Scope and _scope(asdict(scope)) == scope)
+    except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
+        raise RecordError() from None
+
+
 def _identity(value):
     data = _fields(value, Identity)
-    scope = _fields(data["scope"], Scope)
-    return Identity(Scope(_positive(scope["repository_id"]),
-                          _text(scope["environment"], r"[a-z0-9][a-z0-9_-]{0,62}"),
-                          _text(scope["tenancy_id"]), _text(scope["compartment_id"]),
-                          _text(scope["region"], r"[a-z0-9-]{1,64}")),
+    return Identity(_scope(data["scope"]),
                     _text(data["bucket_id"]), _text(data["epoch"], r"[0-9a-f]{32}"))
 
 
