@@ -41,7 +41,7 @@ class RecoveryBucketTests(unittest.TestCase):
         self.assertEqual([c.method for c in calls], ["GET", "POST", "GET"])
         self.assertEqual(calls[0].url, "https://objectstorage.us-ashburn-1.oraclecloud.com/n")
         self.assertEqual(calls[1].url, calls[0].url + "/synthetic-ns/b")
-        self.assertEqual(calls[2].url, calls[1].url + "/synthetic-bucket")
+        self.assertEqual(calls[2].url, calls[1].url + "/synthetic-bucket?fields=autoTiering")
         self.assertEqual(calls[1].headers["opc-client-request-id"], REQUEST.correlation)
         self.assertNotIn("opc-retry-token", calls[1].headers)
         self.assertEqual(json.loads(calls[1].body), {
@@ -62,6 +62,7 @@ class RecoveryBucketTests(unittest.TestCase):
         self.assertEqual(result.removal_id, REMOVAL)
         calls = [c.args[0] for c in self.send.call_args_list]
         self.assertEqual([c.method for c in calls], ["GET", "DELETE"])
+        self.assertTrue(calls[0].url.endswith("/synthetic-bucket?fields=autoTiering"))
         self.assertEqual(calls[1].headers["if-match"], '"new"')
         self.assertEqual(calls[1].headers["opc-client-request-id"], "b" * 32)
 
@@ -105,7 +106,8 @@ class RecoveryBucketTests(unittest.TestCase):
         failures = [response(bucket(**change)) for change in [
             {"id": "other"}, {"metadata": {}}, {"metadata": {**metadata(REQUEST), "extra": "x"}},
             {"versioning": "Enabled"}, {"publicAccessType": "ObjectRead"},
-            {"createdBy": "other"}, {"autoTiering": "Auto"}, {"kmsKeyId": "key"},
+            {"createdBy": "other"}, {"autoTiering": "Auto"}, {"autoTiering": None},
+            {"autoTiering": "InfrequentAccess"}, {"kmsKeyId": "key"},
             {"isReadOnly": 0}, {"objectEventsEnabled": True},
         ]] + [response([]), response(bucket(), headers={"etag": "*"}),
               response({"code": "NotAuthorizedOrNotFound"}, status=404)]

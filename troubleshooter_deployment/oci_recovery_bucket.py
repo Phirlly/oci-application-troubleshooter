@@ -102,6 +102,7 @@ class OciRecoveryBucket:
         validate_acknowledgement(ack)
         self._intent(ack.request)
         result = self._client.get_bucket(ack.request.namespace, ack.request.name,
+                                         fields=["autoTiering"],
                                          retry_strategy=NoneRetryStrategy())
         return self._observed(result, ack.request, ack.identity)[1]
 
