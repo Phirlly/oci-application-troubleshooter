@@ -4,7 +4,8 @@ See an agent diagnose a checkout failure using real OCI logs and metrics,
 propose a repair, and verify recovery after your approval.
 
 **Status: in development.** Deployment recovery and OCI/GitHub integrations have
-offline tests. The demo is not runnable yet; the experience below remains to be built.
+offline tests. Terraform target inputs are defined; workload resources and the
+GitHub workflow are not implemented. The demo is not runnable yet.
 
 ## Configure once
 
@@ -15,7 +16,14 @@ Use your own GitHub repository or a configured team repository. Supply:
 - **OpenAI:** an API key with the required Agents API and model access.
 - **Demo:** a presenter password.
 
-Store credentials in GitHub Secrets. After setup, use only GitHub Actions and
+Keep region and compartment together using
+[deployment.tfvars.json.example](terraform/deployment.tfvars.json.example).
+For the planned GitHub workflow, replace the compartment placeholder and save
+the JSON as Environment secret `DEPLOYMENT_TFVARS_JSON`. Store credentials
+separately in GitHub Secrets; never put keys or passwords in tfvars or commit
+your actual configuration. Region availability and permissions require preflight.
+
+After setup, the intended experience uses only GitHub Actions and
 the demo page—no local Terraform, Cloud Shell, SSH or manual service wiring.
 
 ## Deploy and demonstrate
