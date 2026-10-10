@@ -75,19 +75,37 @@ def advance(store, state, services, *, cleanup):
         _save(store, state, stack_status="deleted")
 
 
-def observe(store, state, services, *, search_start=None, search_minutes=60):
+def _search_window(state, search_start, search_minutes):
     if type(search_minutes) is not int or not 1 <= search_minutes <= 60:
         raise ValueError("invalid_audit_window_duration")
     validate_state(state)
-    if state["bucket_id"] is None:
-        return
     if search_start is None:
         end = datetime.now(timezone.utc).replace(second=0, microsecond=0) + timedelta(minutes=1)
         start = max(datetime.fromisoformat(state["started"]), end - timedelta(minutes=search_minutes))
     else:
         start, end = search_start, search_start + timedelta(minutes=search_minutes)
+    return start, end
+
+
+def observe(store, state, services, *, search_start=None, search_minutes=60):
+    start, end = _search_window(state, search_start, search_minutes)
+    if state["bucket_id"] is None:
+        return
     ack = acknowledged_bucket(state)
     create = services.audit(ack, "CreateBucket", state["create_correlation"], start, end)
     delete = services.audit(ack, "DeleteBucket", state["delete_correlation"], start, end)
     _save(store, state, audit_counts=[len(create.matches), len(delete.matches)],
           audit_window=[start.isoformat(), end.isoformat()])
+
+
+def observe_deletion(state, services, *, search_start=None, search_minutes=60):
+    """Read-only observation: no saved status, completion or ownership changes."""
+    start, end = _search_window(state, search_start, search_minutes)
+    require_current_fixture(state)
+    if (state["stack_status"] != "acknowledged"
+            or state["bucket_status"] not in {"deleted", "delete_uncertain"}
+            or state["receipt_status"] not in {"confirmed", "survived"}):
+        raise ValueError("frozen_delete_observation_unavailable")
+    record = decode(state["record"].encode())
+    scan = services.audit_deletion(state, acknowledged_bucket(state), record.receipt, start, end)
+    return len(scan.matches)

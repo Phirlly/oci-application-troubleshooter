@@ -6,6 +6,7 @@ from oci.exceptions import ConnectTimeout, RequestException, ServiceError
 from oci.loggingsearch.models import SearchLogsDetails
 from oci.retry import NoneRetryStrategy
 
+from .bucket_deletion import encode_intent
 from .oci_client import bounded_client
 from .oci_transport import TRANSPORT_REASONS, TransportError, oci_operation
 from .recovery_bucket import require_text, validate_acknowledgement
@@ -43,7 +44,7 @@ class AuditScan:
     complete: bool = field(default=False, init=False)
 
 
-def _candidate(event, ack, operation, correlation):
+def _candidate(event, ack, operation, correlation, if_match=None):
     """A missing or changed service field yields no candidate, never a guess."""
     try:
         request = ack.request
@@ -69,6 +70,10 @@ def _candidate(event, ack, operation, correlation):
         correlations = [value for key, value in headers.items() if key.lower() == "opc-client-request-id"]
         if correlations != [[correlation]]:
             return None
+        if if_match is not None:
+            revisions = [value for key, value in headers.items() if key.lower() == "if-match"]
+            if revisions != [[if_match]]:
+                return None
         event_id = require_text(event["id"], r"[!-~]{1,256}")
         event_time = require_text(event["time"], r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z")
         datetime.fromisoformat(event_time)
@@ -93,6 +98,17 @@ class OciBucketAudit:
             raise AuditError() from None
 
     def observe(self, ack, operation, correlation, start, end):
+        return self._observe(ack, operation, correlation, start, end)
+
+    def observe_deletion(self, intent, receipt, start, end):
+        """Observe an exact frozen request; never infer a deletion acknowledgement."""
+        try:
+            encode_intent(intent, receipt)
+        except Exception:
+            raise AuditError(scan_reason="query") from None
+        return self._observe(intent.ack, "DeleteBucket", intent.correlation, start, end, intent.if_match)
+
+    def _observe(self, ack, operation, correlation, start, end, if_match=None):
         phase = "query"
         try:
             validate_acknowledgement(ack)
@@ -131,7 +147,7 @@ class OciBucketAudit:
                                 or type(row["data"].get("datetime")) is not int
                                 or type(row["data"].get("logContent")) is not dict):
                             raise AuditError(scan_reason=phase)
-                        candidate = _candidate(row["data"]["logContent"], ack, operation, correlation)
+                        candidate = _candidate(row["data"]["logContent"], ack, operation, correlation, if_match)
                         if candidate is not None:
                             matches.append(candidate)
                     if "opc-next-page" not in result.headers:

@@ -4,10 +4,10 @@ from datetime import datetime
 from pathlib import Path
 import sys
 
-from .proof_flow import advance, observe
+from .proof_flow import advance, observe, observe_deletion
 from .proof_services import ProofServices
 from .proof_state import ProofStore, new_state
-from .recovery_proof import STATE_PATH, audit_diagnostic_exits, audit_scan_exits, parser
+from .recovery_proof import STATE_PATH, OBSERVATIONS, audit_diagnostic_exits, audit_scan_exits, experiment_path, parser
 from troubleshooter_deployment.oci_audit import AuditError
 from troubleshooter_deployment.records import Scope
 
@@ -33,10 +33,10 @@ def main():
     args = arguments.parse_args()
     if not args.allow_live or not args.profile:
         return 2
-    if args.action != "observe" and (args.search_start is not None or args.search_minutes is not None):
+    if args.action not in OBSERVATIONS and (args.search_start is not None or args.search_minutes is not None):
         return 2
     try:
-        with ProofStore(STATE_PATH, inherited_fd=args.lock_fd) as store:
+        with ProofStore(experiment_path(STATE_PATH, args.experiment), inherited_fd=args.lock_fd) as store:
             state = store.read()
             if state is None and (args.action != "run" or not args.compartment):
                 return 2
@@ -51,15 +51,19 @@ def main():
                 if state is None:
                     state = new_state(scope, config["user"], services.bucket.namespace())
                     store.write(state)
-                if args.action == "observe":
+                if args.action in OBSERVATIONS:
                     start = datetime.fromisoformat(args.search_start) if args.search_start else None
+                    if args.action == "observe-delete":
+                        matches = observe_deletion(state, services, search_start=start,
+                                                   search_minutes=60 if args.search_minutes is None else args.search_minutes)
+                        return 0 if matches == 1 else 3 if matches == 0 else 4
                     observe(store, state, services, search_start=start,
                             search_minutes=60 if args.search_minutes is None else args.search_minutes)
                 else:
                     advance(store, state, services, cleanup=args.action == "cleanup")
         return 0
     except AuditError as error:
-        if args.action == "observe":
+        if args.action in OBSERVATIONS:
             return audit_diagnostic_exits().get(error.transport_reason, audit_scan_exits().get(error.scan_reason, 1))
         return 1
     except Exception:

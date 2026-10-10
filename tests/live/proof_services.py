@@ -75,3 +75,13 @@ class ProofServices:
 
     def audit(self, ack, operation, correlation, start, end):
         return self.reader.observe(ack, operation, correlation, start, end)
+
+    def audit_deletion(self, state, ack, receipt, start, end):
+        store = OciReceiptStore(self.config, ack.identity, state["stack_id"])
+        try:
+            intent = store.read_deletion(receipt)
+            if intent is None or intent.ack != ack or intent.correlation != state["delete_correlation"]:
+                raise BucketError()
+        finally:
+            store.close()
+        return self.reader.observe_deletion(intent, receipt, start, end)
