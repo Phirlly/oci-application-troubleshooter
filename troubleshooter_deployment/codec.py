@@ -78,6 +78,13 @@ def _resource(value):
     return resource
 
 
+def validate_identity(identity):
+    try:
+        _require(type(identity) is Identity and _identity(asdict(identity)) == identity)
+    except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
+        raise RecordError() from None
+
+
 def _generation(value):
     data = dict(_fields(value, Generation))
     data["resources"] = tuple(_resource(item) for item in _items(data["resources"]))

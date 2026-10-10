@@ -7,10 +7,9 @@ from troubleshooter_deployment.policy import (
     reserve, resolve_operation,
 )
 from troubleshooter_deployment.journal import Journal, WriteConflict, WriteUncertain
-from troubleshooter_deployment.codec import RecordError
 from tests.deployment.fixtures import (
     ATTEMPT, NEXT_ATTEMPT, IDENTITY, GENERATION, SECOND_GENERATION,
-    OPERATION, REMOVAL, SHA, MemoryStore,
+    OPERATION, REMOVAL, SHA, MemoryStore, TERMINAL,
 )
 
 
@@ -30,12 +29,12 @@ class RecoveryTests(unittest.TestCase):
                 begin_generation(self.record, generation, release)
 
     def test_exact_completed_attempt_required_for_takeover(self):
-        for observed, status in [(ATTEMPT, "in_progress"), (ATTEMPT, "unknown"), (NEXT_ATTEMPT, "completed"), (None, "completed")]:
-            with self.subTest(status=status), self.assertRaises(PolicyError):
-                claim(self.record, NEXT_ATTEMPT, observed, status)
-        taken = claim(self.record, NEXT_ATTEMPT, ATTEMPT, "completed")
+        for observed in [replace(TERMINAL, status="in_progress"), replace(TERMINAL, status="unknown"), replace(TERMINAL, number=2), None]:
+            with self.subTest(observed=observed), self.assertRaises(PolicyError):
+                claim(self.record, NEXT_ATTEMPT, observed)
+        taken = claim(self.record, NEXT_ATTEMPT, TERMINAL)
         self.assertEqual(taken.owner, NEXT_ATTEMPT)
-        self.assertEqual(claim(taken, NEXT_ATTEMPT, None, "unknown"), taken)
+        self.assertEqual(claim(taken, NEXT_ATTEMPT, None), taken)
 
     def test_uncertain_creation_is_never_reserved_twice(self):
         reserved, decision = reserve(self.record, GENERATION, OPERATION, "provision")
@@ -48,7 +47,7 @@ class RecoveryTests(unittest.TestCase):
 
     def test_takeover_preserves_original_operation_and_reconciliation(self):
         reserved, _ = reserve(self.record, GENERATION, OPERATION, "provision")
-        taken = claim(reserved, NEXT_ATTEMPT, ATTEMPT, "completed")
+        taken = claim(reserved, NEXT_ATTEMPT, TERMINAL)
         self.assertEqual(taken.operations[0].attempt, ATTEMPT)
         self.assertEqual(reserve(taken, GENERATION, OPERATION, "provision")[1], "reconcile")
 
@@ -147,7 +146,7 @@ class JournalTests(unittest.TestCase):
             with self.assertRaises(PolicyError):
                 Journal(self.store, identity, ATTEMPT).load()
         next_journal = Journal(self.store, IDENTITY, NEXT_ATTEMPT)
-        taken = next_journal.takeover(self.snapshot, ATTEMPT, "completed")
+        taken = next_journal.takeover(self.snapshot, TERMINAL)
         with self.assertRaises(PolicyError):
             self.journal.commit(taken, taken.record)
         with self.assertRaises(WriteConflict):
@@ -211,7 +210,7 @@ class JournalTests(unittest.TestCase):
 
     def test_foreign_takeover_and_malformed_snapshot_revision_are_rejected(self):
         with self.assertRaises(PolicyError):
-            Journal(self.store, replace(IDENTITY, epoch="9" * 32), NEXT_ATTEMPT).takeover(self.snapshot, ATTEMPT, "completed")
+            Journal(self.store, replace(IDENTITY, epoch="9" * 32), NEXT_ATTEMPT).takeover(self.snapshot, TERMINAL)
         for revision in [None, "", "bad\r\nrevision"]:
             with self.assertRaises(PolicyError):
                 self.journal.commit(replace(self.snapshot, revision=revision), self.snapshot.record)

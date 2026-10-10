@@ -2,7 +2,7 @@
 from dataclasses import replace
 
 from .codec import encode
-from .records import Attempt, Generation, Identity, Operation, OperationResult, Record
+from .records import Attempt, Generation, Identity, Operation, OperationResult, Record, RunObservation
 
 
 class PolicyError(RuntimeError):
@@ -64,11 +64,15 @@ def begin_generation(record: Record, generation_id: str, release_sha: str) -> Re
     return checked(replace(record, generations=record.generations + (Generation(generation_id, release_sha),)))
 
 
-def claim(record: Record, owner: Attempt, observed: Attempt | None, status: str) -> Record:
+def claim(record: Record, owner: Attempt, observed: RunObservation | None) -> Record:
     checked(record)
     if record.owner == owner:
         return record
-    if observed != record.owner or status != "completed":
+    if (type(observed) is not RunObservation
+            or any(type(value) is not int for value in (observed.repository_id, observed.run_id, observed.number))
+            or (observed.repository_id, observed.run_id, observed.number, observed.head_sha, observed.status)
+            != (record.identity.scope.repository_id, record.owner.run_id, record.owner.number,
+                record.owner.source_sha, "completed")):
         raise PolicyError("prior_attempt_not_confirmed_terminal")
     # Uncertain operations retain their original owner and cannot be dispatched.
     return checked(replace(record, owner=owner))

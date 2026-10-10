@@ -17,10 +17,23 @@ class Scope:
 
 @dataclass(frozen=True)
 class Attempt:
+    """source_sha is the trigger commit; workflow_sha is persisted provenance."""
+
     run_id: int
     number: int
     workflow_sha: str
     source_sha: str
+
+
+@dataclass(frozen=True)
+class RunObservation:
+    """Fields actually returned by GitHub's specific-attempt REST endpoint."""
+
+    repository_id: int
+    run_id: int
+    number: int
+    head_sha: str
+    status: str
 
 
 @dataclass(frozen=True)

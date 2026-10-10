@@ -1,10 +1,11 @@
 """Synthetic identities and a fault-injecting conditional store."""
-from troubleshooter_deployment.records import Attempt, Identity, Scope
+from troubleshooter_deployment.records import Attempt, Identity, Scope, RunObservation
 from troubleshooter_deployment.journal import WriteConflict, WriteUncertain
 
 SHA = "a" * 40
 ATTEMPT = Attempt(100, 1, SHA, SHA)
 NEXT_ATTEMPT = Attempt(100, 2, SHA, SHA)
+TERMINAL = RunObservation(42, 100, 1, SHA, "completed")
 IDENTITY = Identity(Scope(42, "demo", "synthetic-tenancy", "synthetic-compartment", "us-ashburn-1"), "synthetic-bucket", "1" * 32)
 GENERATION = "2" * 32
 SECOND_GENERATION = "3" * 32

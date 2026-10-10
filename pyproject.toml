@@ -4,7 +4,7 @@ version = "0.0.0"
 description = "Deployment policy for the OCI application troubleshooting demo"
 requires-python = ">=3.12,<3.13"
 license = "MIT"
-dependencies = []
+dependencies = ["oci==2.187.2"]
 
 [dependency-groups]
 dev = ["coverage==7.16.2"]

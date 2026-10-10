@@ -3,8 +3,8 @@
 See an agent diagnose a checkout failure using real OCI logs and metrics,
 propose a repair, and verify recovery after your approval.
 
-**Status: in development.** Deployment policy and offline tests exist; the demo
-is not runnable yet. The experience below remains to be built and tested.
+**Status: in development.** Deployment recovery and OCI/GitHub integrations have
+offline tests. The demo is not runnable yet; the experience below remains to be built.
 
 ## Configure once
 

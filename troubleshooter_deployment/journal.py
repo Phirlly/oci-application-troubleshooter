@@ -4,7 +4,7 @@ from typing import Protocol
 
 from .codec import decode, encode
 from .policy import PolicyError, bootstrap, claim, reserve, require_forward_transition
-from .records import Attempt, Identity, Record
+from .records import Attempt, Identity, Record, RunObservation
 
 
 class WriteConflict(RuntimeError):
@@ -86,10 +86,10 @@ class Journal:
         self._owned(snapshot)
         return self._save(snapshot, updated)
 
-    def takeover(self, snapshot: Snapshot, observed: Attempt | None, status: str) -> Snapshot:
+    def takeover(self, snapshot: Snapshot, observed: RunObservation | None) -> Snapshot:
         if snapshot.record.identity != self.identity:
             raise PolicyError("journal_ownership_conflict")
-        return self._save(snapshot, claim(snapshot.record, self.owner, observed, status))
+        return self._save(snapshot, claim(snapshot.record, self.owner, observed))
 
     def reserve(self, snapshot: Snapshot, generation_id: str, operation_id: str, kind: str):
         self._owned(snapshot)
