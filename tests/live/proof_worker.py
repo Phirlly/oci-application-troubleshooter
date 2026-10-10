@@ -7,7 +7,8 @@ import sys
 from .proof_flow import advance, observe
 from .proof_services import ProofServices
 from .proof_state import ProofStore, new_state
-from .recovery_proof import STATE_PATH, parser
+from .recovery_proof import STATE_PATH, audit_diagnostic_exits, audit_scan_exits, parser
+from troubleshooter_deployment.oci_audit import AuditError
 from troubleshooter_deployment.records import Scope
 
 
@@ -32,6 +33,8 @@ def main():
     args = arguments.parse_args()
     if not args.allow_live or not args.profile:
         return 2
+    if args.action != "observe" and (args.processed_start is not None or args.processed_minutes is not None):
+        return 2
     try:
         with ProofStore(STATE_PATH, inherited_fd=args.lock_fd) as store:
             state = store.read()
@@ -50,10 +53,15 @@ def main():
                     store.write(state)
                 if args.action == "observe":
                     start = datetime.fromisoformat(args.processed_start) if args.processed_start else None
-                    observe(store, state, services, processed_start=start)
+                    observe(store, state, services, processed_start=start,
+                            processed_minutes=60 if args.processed_minutes is None else args.processed_minutes)
                 else:
                     advance(store, state, services, cleanup=args.action == "cleanup")
         return 0
+    except AuditError as error:
+        if args.action == "observe":
+            return audit_diagnostic_exits().get(error.transport_reason, audit_scan_exits().get(error.scan_reason, 1))
+        return 1
     except Exception:
         return 1
     finally:

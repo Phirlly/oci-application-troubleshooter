@@ -12,8 +12,16 @@ from .codec import MAX_BYTES
 from .request_budget import operation_budget
 
 
+TRANSPORT_REASONS = (
+    "response_headers", "redirect", "content_encoding", "content_length_invalid",
+    "content_length_limit", "body_read", "body_limit", "content_length_mismatch",
+    "json_duplicate_key", "json_nonfinite", "json_invalid", "response_close",
+)
+
+
 class TransportError(RuntimeError):
-    def __init__(self):
+    def __init__(self, reason=None):
+        self.reason = reason if type(reason) is str and reason in TRANSPORT_REASONS else "unspecified"
         super().__init__("oci_transport_rejected")
 
 
@@ -44,37 +52,52 @@ def _pairs(pairs):
     result = {}
     for key, value in pairs:
         if key in result:
-            raise TransportError()
+            raise TransportError("json_duplicate_key")
         result[key] = value
     return result
 
 
 def _constant(value):
-    raise TransportError()
+    raise TransportError("json_nonfinite")
 
 
 def _bounded_response(response, **kwargs):
+    failure, reason = None, "response_headers"
     try:
         # Requests processes redirects (including their bodies) after hooks.
-        if 300 <= response.status_code < 400 or response.headers.get("Content-Encoding") not in (None, "identity"):
-            raise TransportError()
+        if 300 <= response.status_code < 400:
+            raise TransportError("redirect")
+        if response.headers.get("Content-Encoding") not in (None, "identity"):
+            raise TransportError("content_encoding")
         length = response.headers.get("Content-Length")
-        if length is not None and (not re.fullmatch(r"[0-9]{1,9}", length) or int(length) > MAX_BYTES):
-            raise TransportError()
+        if length is not None:
+            if type(length) is not str or not re.fullmatch(r"[0-9]{1,9}", length):
+                raise TransportError("content_length_invalid")
+            if int(length) > MAX_BYTES:
+                raise TransportError("content_length_limit")
+        reason = "body_read"
         body = response.raw.read(MAX_BYTES + 1, decode_content=False)
-        if len(body) > MAX_BYTES or (length is not None and len(body) != int(length)):
-            raise TransportError()
+        if len(body) > MAX_BYTES:
+            raise TransportError("body_limit")
+        if length is not None and len(body) != int(length):
+            raise TransportError("content_length_mismatch")
         # Every nonempty response in the bucket/journal/receipt protocols is
         # JSON. BaseClient deserializes models regardless of the media type.
         if body:
+            reason = "json_invalid"
             json.loads(body, object_pairs_hook=_pairs, parse_constant=_constant)
+    except TransportError as error:
+        failure = TransportError(error.reason)
     except Exception:
-        raise TransportError() from None
+        failure = TransportError(reason)
     finally:
         try:
             response.close()
         except Exception:
-            raise TransportError() from None
+            if failure is None:
+                failure = TransportError("response_close")
+    if failure is not None:
+        raise failure from None
     # The vendored SDK subsequently consumes .content; only bounded bytes remain.
     response._content = body
     response._content_consumed = True
