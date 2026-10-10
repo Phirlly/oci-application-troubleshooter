@@ -3,8 +3,6 @@
 Name-addressed requests cannot atomically fence replacement by an equally
 privileged principal. Bootstrap and live IAM proof remain separate gates.
 """
-from contextlib import contextmanager
-import os
 import re
 
 from oci.circuit_breaker import NoCircuitBreakerStrategy
@@ -14,36 +12,12 @@ from oci.retry import NoneRetryStrategy
 
 from .codec import decode, validate_identity
 from .journal import WriteConflict, WriteUncertain
-from .oci_transport import BoundedOciSession
-from .request_budget import operation_budget
+from .oci_transport import BoundedOciSession, oci_operation as _operation, strong_etag as _etag
 
 
 class StoreError(RuntimeError):
     def __init__(self):
         super().__init__("oci_journal_unavailable_or_mismatched")
-
-
-def _etag(value):
-    if (type(value) is not str or not 0 < len(value) <= 1024 or value.startswith("W/")
-            or value == "*" or not re.fullmatch(r'"[!#-+\--~]+"|[!#-+\--~]+', value)):
-        raise StoreError()
-    return value
-
-
-@contextmanager
-def _operation():
-    # NoneRetryStrategy does not disable this independent BaseClient retry path.
-    key = "OCI_HEADER_PARSING_ERROR_MAX_RETRIES"
-    with operation_budget():
-        previous = os.environ.get(key)
-        os.environ[key] = "0"
-        try:
-            yield
-        finally:
-            if previous is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = previous
 
 
 class OciJournalStore:

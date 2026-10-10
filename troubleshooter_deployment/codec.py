@@ -8,6 +8,7 @@ from .records import Attempt, Generation, Identity, Operation, Receipt, Record, 
 
 MAX_BYTES = 262144
 MAX_ITEMS = 256
+MAX_RECEIPT_BYTES = 12000
 RESOURCE_STATES = {
     "host": {"present", "terminated"},
     "stack": {"present", "destroyed"},
@@ -183,6 +184,36 @@ def encode(record: Record) -> bytes:
         _require(type(record) is Record)
         body = json.dumps(asdict(record), sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
         _require(decode(body) == record)
+        return body
+    except (ValueError, TypeError, OverflowError, RecursionError):
+        raise RecordError() from None
+
+
+def _receipt_bytes(receipt):
+    return json.dumps({"schema": 1, "receipt": asdict(receipt)},
+                      sort_keys=True, separators=(",", ":"), allow_nan=False).encode("ascii")
+
+
+def decode_receipt(body: bytes) -> Receipt:
+    """Standalone canonical receipt; its schema is independent of the journal."""
+    try:
+        _require(type(body) is bytes and len(body) <= MAX_RECEIPT_BYTES)
+        data = json.loads(body, object_pairs_hook=_pairs)
+        _require(type(data) is dict and set(data) == {"schema", "receipt"})
+        _require(type(data["schema"]) is int and data["schema"] == 1)
+        receipt = _receipt(data["receipt"])
+        _unique(receipt.generation_ids)
+        _require(_receipt_bytes(receipt) == body)
+        return receipt
+    except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
+        raise RecordError() from None
+
+
+def encode_receipt(receipt: Receipt) -> bytes:
+    try:
+        _require(type(receipt) is Receipt)
+        body = _receipt_bytes(receipt)
+        _require(decode_receipt(body) == receipt)
         return body
     except (ValueError, TypeError, OverflowError, RecursionError):
         raise RecordError() from None
