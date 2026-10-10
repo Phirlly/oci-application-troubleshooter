@@ -1,4 +1,4 @@
-"""Bounded Audit candidate observations; these NEVER authorize mutation/cleanup."""
+"""Bounded Audit observations and exact frozen-delete success reconciliation."""
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -10,6 +10,7 @@ from .bucket_deletion import encode_intent
 from .oci_client import bounded_client
 from .oci_transport import TRANSPORT_REASONS, TransportError, oci_operation
 from .recovery_bucket import require_text, validate_acknowledgement
+from .records import DeleteAcknowledgement
 from .request_budget import BudgetError
 
 
@@ -107,6 +108,17 @@ class OciBucketAudit:
         except Exception:
             raise AuditError(scan_reason="query") from None
         return self._observe(intent.ack, "DeleteBucket", intent.correlation, start, end, intent.if_match)
+
+    def reconcile_deletion(self, intent, receipt, start, end):
+        """Confirm one dispatched request, never ownership or search completeness.
+
+        Caller fences the original dispatcher and supplies independent durable
+        receipt/intent readback. Empty/duplicate evidence never permits a retry.
+        """
+        scan = self.observe_deletion(intent, receipt, start, end)
+        if len(scan.matches) != 1:
+            return None
+        return DeleteAcknowledgement(intent.ack.identity, receipt.removal_id)
 
     def _observe(self, ack, operation, correlation, start, end, if_match=None):
         phase = "query"

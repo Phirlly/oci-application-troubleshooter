@@ -11,16 +11,25 @@ from .proof_state import ProofStore, ensure_directory
 ROOT = Path(__file__).resolve().parents[2]
 STATE_PATH = ROOT / ".cache" / "recovery-proof"
 OBSERVATIONS = {"observe", "observe-delete"}
+AUDIT_ACTIONS = OBSERVATIONS | {"recover-delete"}
 DELETE_OBSERVATION_STATUSES = {
     0: "delete_request_match_observed",
     3: "delete_request_not_observed",
     4: "delete_request_match_ambiguous",
 }
+DELETE_RECOVERY_STATUSES = {0: "delete_recovery_confirmed", 3: "delete_recovery_pending"}
 
 
 def experiment_path(base, experiment):
     # Closed slots, never arbitrary paths or automatic replacement of old state.
-    return {"original": base, "frozen-delete": base.with_name("recovery-proof-frozen-delete")}[experiment]
+    return {"original": base, "frozen-delete": base.with_name("recovery-proof-frozen-delete"),
+            "interrupted-delete": base.with_name("recovery-proof-interrupted-delete")}[experiment]
+
+
+def valid_action(args):
+    return (not (args.action == "run-interrupted" and args.experiment != "interrupted-delete")
+            and not (args.action not in OBSERVATIONS
+                     and (args.search_start is not None or args.search_minutes is not None)))
 
 
 def audit_diagnostic_exits():
@@ -52,7 +61,9 @@ def supervise(args, store, *, timeout=60, worker="tests.live.proof_worker"):
         code = process.wait(timeout=timeout)
         if action == "observe-delete" and code in DELETE_OBSERVATION_STATUSES:
             return DELETE_OBSERVATION_STATUSES[code]
-        if code != 0 and action in OBSERVATIONS:
+        if action == "recover-delete" and code in DELETE_RECOVERY_STATUSES:
+            return DELETE_RECOVERY_STATUSES[code]
+        if code != 0 and action in AUDIT_ACTIONS:
             for reason, diagnostic_code in audit_diagnostic_exits().items():
                 if code == diagnostic_code:
                     return "audit_transport_" + reason
@@ -78,8 +89,8 @@ def supervise(args, store, *, timeout=60, worker="tests.live.proof_worker"):
 
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
-    result.add_argument("action", choices=("run", "observe", "observe-delete", "cleanup"))
-    result.add_argument("--experiment", choices=("original", "frozen-delete"), default="original",
+    result.add_argument("action", choices=("run", "run-interrupted", "observe", "observe-delete", "recover-delete", "cleanup"))
+    result.add_argument("--experiment", choices=("original", "frozen-delete", "interrupted-delete"), default="original",
                         help="Fixed developer state slot; never resets existing evidence.")
     result.add_argument("--allow-live", action="store_true", help="Explicitly authorize this bounded cloud experiment.")
     result.add_argument("--profile", help="Explicit OCI API-key profile. Keys are never command arguments.")
@@ -95,8 +106,8 @@ def main():
     args = arguments.parse_args()
     if not args.allow_live or not args.profile:
         arguments.error("--allow-live and --profile are required; no cloud calls made")
-    if args.action not in OBSERVATIONS and (args.search_start is not None or args.search_minutes is not None):
-        arguments.error("--search-start and --search-minutes require observe or observe-delete")
+    if not valid_action(args):
+        arguments.error("search flags require observe/observe-delete; run-interrupted requires interrupted-delete slot")
     try:
         path = experiment_path(STATE_PATH, args.experiment)
         ensure_directory(path.parent)
@@ -107,7 +118,7 @@ def main():
             if state is not None:
                 print("stack=" + state["stack_status"] + " bucket=" + state["bucket_status"]
                       + " receipt=" + state["receipt_status"])
-                if (args.action != "observe-delete" and state["audit_counts"] is not None
+                if (args.action not in {"observe-delete", "recover-delete"} and state["audit_counts"] is not None
                         and status == "worker_finished_check_state"):
                     print("audit_candidates=" + ",".join(map(str, state["audit_counts"])))
                     print("audit_coverage=unknown")
@@ -115,6 +126,8 @@ def main():
                 if status in DELETE_OBSERVATION_STATUSES.values():
                     print("audit_coverage=unknown")
                 return 0 if status == DELETE_OBSERVATION_STATUSES[0] else 1
+            if args.action == "recover-delete":
+                return 0 if status == DELETE_RECOVERY_STATUSES[0] else 1
             return 0 if status == "worker_finished_check_state" else 1
     except Exception:
         print("proof_unavailable_preserve_state")

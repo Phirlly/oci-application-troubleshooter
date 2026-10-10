@@ -4,10 +4,11 @@ from datetime import datetime
 from pathlib import Path
 import sys
 
-from .proof_flow import advance, observe, observe_deletion
+from .proof_flow import advance, observe, observe_deletion, recover_deletion
 from .proof_services import ProofServices
 from .proof_state import ProofStore, new_state
-from .recovery_proof import STATE_PATH, OBSERVATIONS, audit_diagnostic_exits, audit_scan_exits, experiment_path, parser
+from .recovery_proof import (STATE_PATH, OBSERVATIONS, AUDIT_ACTIONS, audit_diagnostic_exits,
+                             audit_scan_exits, experiment_path, parser, valid_action)
 from troubleshooter_deployment.oci_audit import AuditError
 from troubleshooter_deployment.records import Scope
 
@@ -33,12 +34,12 @@ def main():
     args = arguments.parse_args()
     if not args.allow_live or not args.profile:
         return 2
-    if args.action not in OBSERVATIONS and (args.search_start is not None or args.search_minutes is not None):
+    if not valid_action(args):
         return 2
     try:
         with ProofStore(experiment_path(STATE_PATH, args.experiment), inherited_fd=args.lock_fd) as store:
             state = store.read()
-            if state is None and (args.action != "run" or not args.compartment):
+            if state is None and (args.action not in {"run", "run-interrupted"} or not args.compartment):
                 return 2
             config = credentials(args.profile)
             # Synthetic repository/attempt provenance is deliberately local.
@@ -47,10 +48,12 @@ def main():
             if state is not None and (state["scope"] != scope.__dict__ or state["principal"] != config["user"]
                                       or args.compartment not in (None, scope.compartment_id)):
                 return 2
-            with ProofServices(config, scope) as services:
+            with ProofServices(config, scope, discard_delete_reply=args.action == "run-interrupted") as services:
                 if state is None:
                     state = new_state(scope, config["user"], services.bucket.namespace())
                     store.write(state)
+                if args.action == "recover-delete":
+                    return 0 if recover_deletion(store, state, services) else 3
                 if args.action in OBSERVATIONS:
                     start = datetime.fromisoformat(args.search_start) if args.search_start else None
                     if args.action == "observe-delete":
@@ -63,7 +66,7 @@ def main():
                     advance(store, state, services, cleanup=args.action == "cleanup")
         return 0
     except AuditError as error:
-        if args.action in OBSERVATIONS:
+        if args.action in AUDIT_ACTIONS:
             return audit_diagnostic_exits().get(error.transport_reason, audit_scan_exits().get(error.scan_reason, 1))
         return 1
     except Exception:

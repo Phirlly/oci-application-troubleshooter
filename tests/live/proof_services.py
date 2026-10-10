@@ -3,13 +3,14 @@ from contextlib import ExitStack
 
 from troubleshooter_deployment.oci_audit import OciBucketAudit
 from troubleshooter_deployment.oci_receipt import OciReceiptStore
-from troubleshooter_deployment.oci_recovery_bucket import OciRecoveryBucket, BucketError
+from troubleshooter_deployment.oci_recovery_bucket import OciRecoveryBucket, BucketError, BucketUncertain
 from .proof_stack import ProofStack
 
 
 class ProofServices:
-    def __init__(self, config, scope):
+    def __init__(self, config, scope, *, discard_delete_reply=False):
         self.config, self.scope = config, scope
+        self.discard_delete_reply = discard_delete_reply
         self.resources = ExitStack()
 
     def __enter__(self):
@@ -57,7 +58,11 @@ class ProofServices:
             store.close()
 
     def delete_bucket(self, ack, record, receipt, intent):
-        return self.bucket.delete_empty(ack, record, receipt, intent)
+        result = self.bucket.delete_empty(ack, record, receipt, intent)
+        if self.discard_delete_reply:
+            # Developer-only fault: the controller never receives the valid ACK.
+            raise BucketUncertain()
+        return result
 
     def persist(self, state, record):
         store = OciReceiptStore(self.config, record.identity, state["stack_id"])
@@ -76,7 +81,7 @@ class ProofServices:
     def audit(self, ack, operation, correlation, start, end):
         return self.reader.observe(ack, operation, correlation, start, end)
 
-    def audit_deletion(self, state, ack, receipt, start, end):
+    def _retained_deletion(self, state, ack, receipt):
         store = OciReceiptStore(self.config, ack.identity, state["stack_id"])
         try:
             intent = store.read_deletion(receipt)
@@ -84,4 +89,12 @@ class ProofServices:
                 raise BucketError()
         finally:
             store.close()
+        return intent
+
+    def audit_deletion(self, state, ack, receipt, start, end):
+        intent = self._retained_deletion(state, ack, receipt)
         return self.reader.observe_deletion(intent, receipt, start, end)
+
+    def reconcile_deletion(self, state, ack, receipt, start, end):
+        intent = self._retained_deletion(state, ack, receipt)
+        return self.reader.reconcile_deletion(intent, receipt, start, end)

@@ -100,7 +100,10 @@ class OperationResult:
 
 @dataclass(frozen=True)
 class DeleteAcknowledgement:
-    """Received successful deletion response, bound to the exact purge request."""
+    """Trusted direct or reconciled successful response for the exact purge.
+
+    Only validated adapters may supply this; an Audit candidate is not an ACK.
+    """
 
     identity: Identity
     removal_id: str

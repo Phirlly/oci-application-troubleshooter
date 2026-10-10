@@ -102,10 +102,10 @@ def may_purge(record: Record, durable_readback: Receipt | None) -> bool:
 
 def completion(receipt: Receipt, durable_readback: Receipt | None,
                acknowledgement: DeleteAcknowledgement | None) -> str:
-    """A lost delete reply (including subsequent 404) stays incomplete.
+    """Require a positive direct or strictly reconciled deletion response.
 
-    The caller must already hold the independently durable receipt. Matching
-    Audit evidence is deliberately not implemented until a live proof exists.
+    The caller must already hold the independently durable receipt. A lost
+    reply, subsequent404 or ordinary Audit observation alone is insufficient.
     """
     if (durable_readback == receipt and acknowledgement is not None and acknowledgement.identity == receipt.identity
             and acknowledgement.removal_id == receipt.removal_id):

@@ -53,7 +53,8 @@ def bucket_request(state):
 def validate_state(state):
     try:
         from .proof_stack import ZIP_SHA256, LEGACY_ZIP_SHA256
-        if type(state) is not dict or set(state) != FIELDS or type(state["schema"]) is not int or state["schema"] != 1:
+        if (type(state) is not dict or set(state) not in (FIELDS, FIELDS | {"delete_window"})
+                or type(state["schema"]) is not int or state["schema"] != 1):
             raise ProofStateError()
         if state["zip_sha256"] not in (ZIP_SHA256, LEGACY_ZIP_SHA256):
             raise ProofStateError()
@@ -94,6 +95,16 @@ def validate_state(state):
                 raise ProofStateError()
         if state["receipt_status"] == "survived" and state["bucket_status"] != "deleted":
             raise ProofStateError()
+        if "delete_window" in state:
+            from datetime import timedelta
+            window = state["delete_window"]
+            if (state["bucket_status"] not in {"delete_uncertain", "deleted"}
+                    or type(window) is not list or len(window) != 2):
+                raise ProofStateError()
+            for instant in window:
+                require_text(instant, r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00\+00:00")
+            if not timedelta(0) < datetime.fromisoformat(window[1]) - datetime.fromisoformat(window[0]) <= timedelta(hours=1):
+                raise ProofStateError()
         counts = state["audit_counts"]
         if counts is not None and (type(counts) is not list or len(counts) != 2
                                   or any(type(n) is not int or not 0 <= n <= 1024 for n in counts)):

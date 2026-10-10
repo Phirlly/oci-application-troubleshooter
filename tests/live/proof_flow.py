@@ -57,7 +57,9 @@ def advance(store, state, services, *, cleanup):
             return
         _save(store, state, receipt_status="confirmed")
         intent = services.prepare_deletion(state, ack, record, receipt)
-        _save(store, state, bucket_status="delete_uncertain")
+        start = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+        _save(store, state, bucket_status="delete_uncertain",
+              delete_window=[start.isoformat(), (start + timedelta(hours=1)).isoformat()])
         result = services.delete_bucket(ack, record, receipt, intent)
         if completion(record.receipt, receipt, result) != "complete":
             return
@@ -109,3 +111,31 @@ def observe_deletion(state, services, *, search_start=None, search_minutes=60):
     record = decode(state["record"].encode())
     scan = services.audit_deletion(state, acknowledged_bucket(state), record.receipt, start, end)
     return len(scan.matches)
+
+
+def recover_deletion(store, state, services):
+    """Caller holds the exclusive lock after the previous worker has stopped.
+
+    Reconcile with bounded reads only; stack cleanup remains a separate action.
+    """
+    validate_state(state)
+    require_current_fixture(state)
+    if (state["stack_status"] != "acknowledged" or "delete_window" not in state
+            or state["bucket_status"] not in {"deleted", "delete_uncertain"}
+            or state["receipt_status"] not in {"confirmed", "survived"}):
+        raise ValueError("frozen_delete_recovery_unavailable")
+    record, ack = decode(state["record"].encode()), acknowledged_bucket(state)
+    if state["bucket_status"] == "delete_uncertain":
+        start, end = map(datetime.fromisoformat, state["delete_window"])
+        end = min(end, datetime.now(timezone.utc).replace(second=0, microsecond=0))
+        if end <= start:
+            return False
+        result = services.reconcile_deletion(state, ack, record.receipt, start, end)
+        if completion(record.receipt, record.receipt, result) != "complete":
+            return False
+        _save(store, state, bucket_status="deleted")
+    if services.read_receipt(state, ack) != record.receipt:
+        return False
+    if state["receipt_status"] != "survived":
+        _save(store, state, receipt_status="survived")
+    return True
