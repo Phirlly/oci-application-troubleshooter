@@ -170,7 +170,7 @@ class ProofFlowTests(unittest.TestCase):
         self.state["started"] = old_start.isoformat()
         observe(self.store, self.state, self.services)
         self.assertGreater(datetime.fromisoformat(self.state["audit_window"][0]), old_start)
-        observe(self.store, self.state, self.services, processed_start=old_start)
+        observe(self.store, self.state, self.services, search_start=old_start)
         self.assertEqual(self.state["audit_window"], [old_start.isoformat(), (old_start + timedelta(hours=1)).isoformat()])
 
 
@@ -463,7 +463,7 @@ class ProofWorkerContractTests(unittest.TestCase):
 
             with patch("oci.object_storage.object_storage_client.Signer", return_value=SyntheticSigner()), patch(
                     "oci.resource_manager.resource_manager_client.Signer", return_value=SyntheticSigner()), patch(
-                    "oci.audit.audit_client.Signer", return_value=SyntheticSigner()), patch(
+                    "oci.loggingsearch.log_search_client.Signer", return_value=SyntheticSigner()), patch(
                     "oci.base_client.OCIHTTPAdapter.send", side_effect=send), patch(
                     "tests.live.proof_worker.credentials", return_value=CONFIG) as creds, patch.object(
                     proof_worker, "STATE_PATH", path):

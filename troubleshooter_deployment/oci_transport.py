@@ -105,12 +105,15 @@ def _bounded_response(response, **kwargs):
 
 
 class BoundedOciSession(Session):
-    # BaseClient copies sessions on certain errors. Preserve the origin on copy.
-    __attrs__ = Session.__attrs__ + ["_origin"]
+    # BaseClient copies sessions on certain errors. Preserve all bounds on copy.
+    __attrs__ = Session.__attrs__ + ["_origin", "_read_seconds"]
 
-    def __init__(self, origin):
+    def __init__(self, origin, *, read_seconds=5):
+        if type(read_seconds) is not int or read_seconds not in (5, 15):
+            raise TransportError()
         super().__init__()
         self._origin = origin
+        self._read_seconds = read_seconds
         self.trust_env = False
         self.mount("https://", OCIHTTPAdapter())
 
@@ -118,7 +121,7 @@ class BoundedOciSession(Session):
         parsed = urlsplit(url)
         if f"{parsed.scheme}://{parsed.netloc}" != self._origin or parsed.scheme != "https":
             raise TransportError()
-        kwargs.update(allow_redirects=False, stream=True, verify=True, timeout=(5, 5), proxies={},
+        kwargs.update(allow_redirects=False, stream=True, verify=True, timeout=(5, self._read_seconds), proxies={},
                       hooks={"response": [_bounded_response]})
         kwargs["headers"] = dict(kwargs.get("headers") or {}, **{"Accept-Encoding": "identity"})
         result = super().request(method, url, **kwargs)

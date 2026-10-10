@@ -33,7 +33,7 @@ def main():
     args = arguments.parse_args()
     if not args.allow_live or not args.profile:
         return 2
-    if args.action != "observe" and (args.processed_start is not None or args.processed_minutes is not None):
+    if args.action != "observe" and (args.search_start is not None or args.search_minutes is not None):
         return 2
     try:
         with ProofStore(STATE_PATH, inherited_fd=args.lock_fd) as store:
@@ -52,9 +52,9 @@ def main():
                     state = new_state(scope, config["user"], services.bucket.namespace())
                     store.write(state)
                 if args.action == "observe":
-                    start = datetime.fromisoformat(args.processed_start) if args.processed_start else None
-                    observe(store, state, services, processed_start=start,
-                            processed_minutes=60 if args.processed_minutes is None else args.processed_minutes)
+                    start = datetime.fromisoformat(args.search_start) if args.search_start else None
+                    observe(store, state, services, search_start=start,
+                            search_minutes=60 if args.search_minutes is None else args.search_minutes)
                 else:
                     advance(store, state, services, cleanup=args.action == "cleanup")
         return 0

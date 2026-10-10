@@ -63,6 +63,24 @@ class OciTransportTests(unittest.TestCase):
         with self.assertRaises(TransportError):
             self.request(copied)
 
+    def test_search_read_allowance_survives_copy_and_cannot_be_overridden(self):
+        session = BoundedOciSession("https://logging.us-ashburn-1.oci.oraclecloud.com", read_seconds=15)
+        self.addCleanup(session.close)
+        copied = copy.copy(session)
+        self.addCleanup(copied.close)
+        for client in (session, copied):
+            self.send.return_value = response({})
+            client.post("https://logging.us-ashburn-1.oci.oraclecloud.com/20190909/search",
+                        timeout=None, verify=False, proxies={"https": "https://untrusted.invalid"})
+            self.assertEqual(self.send.call_args.kwargs["timeout"], (5, 15))
+            self.assertTrue(self.send.call_args.kwargs["verify"])
+            self.assertEqual(self.send.call_args.kwargs["proxies"], {})
+        self.send.reset_mock()
+        for value in (True, 0, 16, 15.0, None, "15"):
+            with self.assertRaises(TransportError):
+                BoundedOciSession("https://logging.us-ashburn-1.oci.oraclecloud.com", read_seconds=value)
+        self.send.assert_not_called()
+
     def test_untrusted_content_type_cannot_bypass_strict_json(self):
         for content_type in [None, "text/plain", "application/octet-stream"]:
             self.send.return_value = response(body=b'{"id":"other","id":"expected"}',

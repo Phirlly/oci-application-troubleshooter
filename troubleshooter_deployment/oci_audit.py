@@ -1,9 +1,9 @@
 """Bounded Audit candidate observations; these NEVER authorize mutation/cleanup."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-import re
 
 from oci.exceptions import ConnectTimeout, RequestException, ServiceError
+from oci.loggingsearch.models import SearchLogsDetails
 from oci.retry import NoneRetryStrategy
 
 from .oci_client import bounded_client
@@ -30,16 +30,17 @@ class AuditCandidate:
     event_id: str
     event_time: str
     event_type: str
-    event_type_version: str
+    data_schema: str
     source: str
 
 
 @dataclass(frozen=True)
 class AuditScan:
-    processed_start: datetime
-    processed_end: datetime
+    search_start: datetime
+    search_end: datetime
     matches: tuple[AuditCandidate, ...]
-    complete: bool = True
+    # Accepted search pages cannot establish index/ingestion completeness.
+    complete: bool = field(default=False, init=False)
 
 
 def _candidate(event, ack, operation, correlation):
@@ -51,9 +52,12 @@ def _candidate(event, ack, operation, correlation):
         method, path, status = ("POST", f"/n/{request.namespace}/b", "200") if operation == "CreateBucket" else (
             "DELETE", f"/n/{request.namespace}/b/{request.name}", "204")
         checks = [
-            (event["cloudEventsVersion"], "0.1"), (event["contentType"], "application/json"),
-            (data["eventName"], operation), (data["resourceName"], request.name),
-            (data["resourceId"], ack.identity.bucket_id), (data["compartmentId"], request.scope.compartment_id),
+            (event["specversion"], "1.0"), (event["dataschema"], "2.0"),
+            (event.get("datacontenttype", "application/json"), "application/json"),
+            (event["type"], "com.oraclecloud.objectstorage." + operation.lower()),
+            (data["eventName"], operation), (data["additionalDetails"]["bucketName"], request.name),
+            (data["additionalDetails"]["namespace"], request.namespace),
+            (data["resourceId"], path), (data["compartmentId"], request.scope.compartment_id),
             (identity["principalId"], request.principal), (identity["tenantId"], request.scope.tenancy_id),
             (api_request["action"], method), (api_request["path"], path), (response["status"], status),
         ]
@@ -65,12 +69,11 @@ def _candidate(event, ack, operation, correlation):
         correlations = [value for key, value in headers.items() if key.lower() == "opc-client-request-id"]
         if correlations != [[correlation]]:
             return None
-        event_id = require_text(event["eventId"], r"[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
-        event_time = require_text(event["eventTime"], r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z")
+        event_id = require_text(event["id"], r"[!-~]{1,256}")
+        event_time = require_text(event["time"], r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z")
         datetime.fromisoformat(event_time)
-        values = [require_text(event[key], r"[A-Za-z0-9_.:-]{1,256}")
-                  for key in ("eventType", "eventTypeVersion", "source")]
-        return AuditCandidate(event_id, event_time, *values)
+        source = require_text(event["source"], r"[!-~]{1,1024}")
+        return AuditCandidate(event_id, event_time, event["type"], event["dataschema"], source)
     except (ValueError, KeyError, TypeError, AttributeError):
         return None
 
@@ -78,7 +81,7 @@ def _candidate(event, ack, operation, correlation):
 class OciBucketAudit:
     def __init__(self, config, scope):
         try:
-            self._client = bounded_client(config, scope, "audit")
+            self._client = bounded_client(config, scope, "loggingsearch")
             self._scope = scope
         except Exception:
             raise AuditError() from None
@@ -103,24 +106,32 @@ class OciBucketAudit:
                     raise AuditError(scan_reason=phase)
             if not timedelta(0) < end - start <= timedelta(hours=1):
                 raise AuditError(scan_reason=phase)
-            matches, seen, count, page = [], set(), 0, None
+            query = (f'search "{self._scope.compartment_id}/_Audit" | where '
+                     "data.eventName = 'CreateBucket' or data.eventName = 'DeleteBucket'")
+            details = SearchLogsDetails(time_start=start.astimezone(timezone.utc),
+                                        time_end=end.astimezone(timezone.utc),
+                                        search_query=query, is_return_field_info=False)
+            matches, seen, page = [], set(), None
             with oci_operation():
                 for _ in range(5):
                     phase = "request"
-                    result = self._client.list_events(
-                        self._scope.compartment_id, start.astimezone(timezone.utc), end.astimezone(timezone.utc),
-                        retry_strategy=NoneRetryStrategy(), **({} if page is None else {"page": page}),
+                    result = self._client.search_logs(
+                        details, limit=10, retry_strategy=NoneRetryStrategy(),
+                        **({} if page is None else {"page": page}),
                     )
                     phase = "response"
-                    if result.status != 200 or type(result.data) is not list:
+                    if (result.status != 200 or type(result.data) is not dict
+                            or type(result.data.get("results")) is not list):
                         raise AuditError(scan_reason=phase)
-                    count += len(result.data)
-                    if count > 1024:
+                    rows = result.data["results"]
+                    if len(rows) > 10:
                         raise AuditError(scan_reason="event_limit")
-                    if any(type(event) is not dict for event in result.data):
-                        raise AuditError(scan_reason=phase)
-                    for event in result.data:
-                        candidate = _candidate(event, ack, operation, correlation)
+                    for row in rows:
+                        if (type(row) is not dict or type(row.get("data")) is not dict
+                                or type(row["data"].get("datetime")) is not int
+                                or type(row["data"].get("logContent")) is not dict):
+                            raise AuditError(scan_reason=phase)
+                        candidate = _candidate(row["data"]["logContent"], ack, operation, correlation)
                         if candidate is not None:
                             matches.append(candidate)
                     if "opc-next-page" not in result.headers:

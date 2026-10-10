@@ -68,9 +68,9 @@ def parser():
     result.add_argument("--allow-live", action="store_true", help="Explicitly authorize this bounded cloud experiment.")
     result.add_argument("--profile", help="Explicit OCI API-key profile. Keys are never command arguments.")
     result.add_argument("--compartment", help="Approved isolated compartment for the initial run only.")
-    result.add_argument("--processed-start", help="Observe only: UTC minute starting the Audit window.")
-    result.add_argument("--processed-minutes", type=int, choices=range(1, 61), metavar="MINUTES",
-                        help="Observe only: Audit window duration, 1..60 minutes (default: 60).")
+    result.add_argument("--search-start", help="Observe only: UTC minute starting the log-search window; coverage is unknown.")
+    result.add_argument("--search-minutes", type=int, choices=range(1, 61), metavar="MINUTES",
+                        help="Observe only: Log-search window duration, 1..60 minutes (default: 60).")
     return result
 
 
@@ -79,8 +79,8 @@ def main():
     args = arguments.parse_args()
     if not args.allow_live or not args.profile:
         arguments.error("--allow-live and --profile are required; no cloud calls made")
-    if args.action != "observe" and (args.processed_start is not None or args.processed_minutes is not None):
-        arguments.error("--processed-start and --processed-minutes are only valid with observe")
+    if args.action != "observe" and (args.search_start is not None or args.search_minutes is not None):
+        arguments.error("--search-start and --search-minutes are only valid with observe")
     try:
         ensure_directory(STATE_PATH.parent)
         with ProofStore(STATE_PATH) as store:
@@ -92,6 +92,7 @@ def main():
                       + " receipt=" + state["receipt_status"])
                 if state["audit_counts"] is not None and status == "worker_finished_check_state":
                     print("audit_candidates=" + ",".join(map(str, state["audit_counts"])))
+                    print("audit_coverage=unknown")
             return 0 if status == "worker_finished_check_state" else 1
     except Exception:
         print("proof_unavailable_preserve_state")

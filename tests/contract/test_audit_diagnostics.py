@@ -3,17 +3,17 @@ from copy import deepcopy
 from contextlib import redirect_stdout
 from io import StringIO
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
-from urllib.parse import parse_qs, urlsplit
 
 from oci.exceptions import ConnectTimeout, RequestException, ServiceError
 from tests.contract.oci_responses import CONFIG, SyntheticSigner, response
-from tests.contract.test_oci_audit import START, END
+from tests.contract.test_oci_audit import START, END, page, event
 from tests.contract.test_oci_recovery_bucket import ACK, REQUEST
 from tests.live import proof_worker
 from tests.live.proof_flow import observe
@@ -84,7 +84,7 @@ class TransportReasonTests(unittest.TestCase):
 
 class AuditReasonTests(unittest.TestCase):
     def test_scan_failures_are_fixed_and_preserve_bounds(self):
-        with patch("oci.audit.audit_client.Signer", return_value=SyntheticSigner()):
+        with patch("oci.loggingsearch.log_search_client.Signer", return_value=SyntheticSigner()):
             audit = OciBucketAudit(CONFIG, REQUEST.scope)
         self.addCleanup(audit.close)
         cases = [
@@ -93,14 +93,14 @@ class AuditReasonTests(unittest.TestCase):
             ([RuntimeError("synthetic-secret")], "request"),
             ([BudgetError()], "budget"),
             ([response({})], "response"),
-            ([response([], status=202)], "response"),
-            ([response([True])], "response"),
-            ([response([{}] * 1025)], "event_limit"),
-            ([response([{}] * 600, headers={"opc-next-page": "next"}), response([{}] * 500)], "event_limit"),
-            ([response([], headers={"opc-next-page": "next"}), RequestException("synthetic-secret")], "request"),
-            ([response([], headers={"opc-next-page": ""})], "pagination"),
-            ([response([], headers={"opc-next-page": "same"}) for _ in range(2)], "pagination"),
-            ([response([], headers={"opc-next-page": str(i)}) for i in range(5)], "page_limit"),
+            ([page(status=202)], "response"),
+            ([response({"results": [True]})], "response"),
+            ([page([event()] * 11)], "event_limit"),
+            ([page([event()] * 10, headers={"opc-next-page": "next"}), page([event()] * 11)], "event_limit"),
+            ([page(headers={"opc-next-page": "next"}), RequestException("synthetic-secret")], "request"),
+            ([page(headers={"opc-next-page": ""})], "pagination"),
+            ([page(headers={"opc-next-page": "same"}) for _ in range(2)], "pagination"),
+            ([page(headers={"opc-next-page": str(i)}) for i in range(5)], "page_limit"),
         ]
         for status in (400, 401, 403, 404, 408, 409, 429, 500, 502, 503, 504):
             cases.append(([response({"code": "synthetic-secret"}, status=status)], "service_" + str(status)))
@@ -123,10 +123,10 @@ class AuditReasonTests(unittest.TestCase):
             self.assertIsNone(AuditError(scan_reason=reason).scan_reason)
 
     def test_actual_sdk_preserves_reason_and_never_accepts_a_partial_scan(self):
-        with patch("oci.audit.audit_client.Signer", return_value=SyntheticSigner()):
+        with patch("oci.loggingsearch.log_search_client.Signer", return_value=SyntheticSigner()):
             audit = OciBucketAudit(CONFIG, REQUEST.scope)
         self.addCleanup(audit.close)
-        for prefix in ([], [response([], headers={"opc-next-page": "next"})]):
+        for prefix in ([], [page(headers={"opc-next-page": "next"})]):
             with patch("oci.base_client.OCIHTTPAdapter.send",
                        side_effect=prefix + [response(body=b"synthetic-secret")]) as send:
                 with self.assertRaises(AuditError) as caught:
@@ -147,9 +147,9 @@ class AuditReasonTests(unittest.TestCase):
                      audit_counts=[1, 1], audit_window=[START.isoformat(), END.isoformat()])
         previous = deepcopy(state)
         services, store = Mock(), Mock()
-        services.audit.side_effect = AuditError("body_limit")
+        services.audit.side_effect = [Mock(matches=(object(),)), AuditError("body_limit")]
         with self.assertRaises(AuditError):
-            observe(store, state, services, processed_start=START)
+            observe(store, state, services, search_start=START)
         self.assertEqual(state, previous)
         store.write.assert_not_called()
 
@@ -177,6 +177,7 @@ class AuditWorkerDiagnosticTests(unittest.TestCase):
                 store.return_value.__enter__.return_value.read.return_value = state
                 self.assertEqual(recovery_proof.main(), expected)
             self.assertEqual("audit_candidates=1,1" in output.getvalue(), expected == 0)
+            self.assertEqual("audit_coverage=unknown" in output.getvalue(), expected == 0)
             self.assertIn(status, output.getvalue())
 
     def test_actual_worker_returns_reason_code_without_writing_state_or_calling_mutations(self):
@@ -192,26 +193,26 @@ class AuditWorkerDiagnosticTests(unittest.TestCase):
                 store.write(state)
                 original = (path / "state.json").read_bytes()
                 argv = ["worker", "observe", "--allow-live", "--profile", "synthetic",
-                        "--processed-start", START.isoformat(), "--processed-minutes", "1",
+                        "--search-start", START.isoformat(), "--search-minutes", "1",
                         "--lock-fd", str(os.dup(store.lock_fd))]
                 with patch.object(sys, "argv", argv), patch.object(proof_worker, "STATE_PATH", path), patch(
                         "tests.live.proof_worker.credentials", return_value=CONFIG), patch(
                         "oci.object_storage.object_storage_client.Signer", return_value=SyntheticSigner()), patch(
                         "oci.resource_manager.resource_manager_client.Signer", return_value=SyntheticSigner()), patch(
-                        "oci.audit.audit_client.Signer", return_value=SyntheticSigner()), patch(
+                        "oci.loggingsearch.log_search_client.Signer", return_value=SyntheticSigner()), patch(
                         "oci.base_client.OCIHTTPAdapter.send", return_value=response(body=b"synthetic-secret")) as send:
                     code = proof_worker.main()
                 self.assertEqual(code, audit_diagnostic_exits()["json_invalid"])
                 self.assertEqual((path / "state.json").read_bytes(), original)
                 send.assert_called_once()
                 request = send.call_args.args[0]
-                self.assertEqual(request.method, "GET")
+                self.assertEqual(request.method, "POST")
                 self.assertEqual(request.url.split("?")[0],
-                                 "https://audit.us-ashburn-1.oraclecloud.com/20190901/auditEvents")
+                                 "https://logging.us-ashburn-1.oci.oraclecloud.com/20190909/search")
                 from datetime import datetime, timedelta
-                query = parse_qs(urlsplit(request.url).query)
-                self.assertEqual(datetime.fromisoformat(query["endTime"][0])
-                                 - datetime.fromisoformat(query["startTime"][0]), timedelta(minutes=1))
+                query = json.loads(request.body)
+                self.assertEqual(datetime.fromisoformat(query["timeEnd"])
+                                 - datetime.fromisoformat(query["timeStart"]), timedelta(minutes=1))
 
     def test_worker_and_supervisor_carry_scan_failures_without_provider_content(self):
         from tests.live.recovery_proof import audit_diagnostic_exits, audit_scan_exits
@@ -230,6 +231,43 @@ class AuditWorkerDiagnosticTests(unittest.TestCase):
                 self.assertEqual(supervise(["cleanup"], Mock(lock_fd=7)), "worker_failed_check_state")
             self.assertEqual(launch.call_args.kwargs["stdout"], subprocess.DEVNULL)
             self.assertEqual(launch.call_args.kwargs["stderr"], subprocess.DEVNULL)
+
+    def test_actual_worker_saves_only_correlated_counts_and_preserves_ownership(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp).resolve() / "proof"
+            scope = Scope(1, "recovery-proof", CONFIG["tenancy"], REQUEST.scope.compartment_id, CONFIG["region"])
+            state = new_state(scope, REQUEST.principal, REQUEST.namespace)
+            state.update(stack_status="acknowledged", stack_id="synthetic-stack",
+                         bucket_status="acknowledged", bucket_id="synthetic-bucket")
+            items = []
+            for operation, key in (("CreateBucket", "create_correlation"), ("DeleteBucket", "delete_correlation")):
+                item = event(operation)
+                item["data"]["additionalDetails"]["bucketName"] = state["name"]
+                item["data"]["request"]["headers"] = {"opc-client-request-id": [state[key]]}
+                if operation == "DeleteBucket":
+                    item["data"]["resourceId"] = item["data"]["request"]["path"] = "/n/synthetic-ns/b/" + state["name"]
+                items.append(item)
+            with ProofStore(path) as store:
+                store.write(state)
+                argv = ["worker", "observe", "--allow-live", "--profile", "synthetic",
+                        "--search-start", START.isoformat(), "--search-minutes", "30",
+                        "--lock-fd", str(os.dup(store.lock_fd))]
+                replies = [page(items), page(items)]
+                with patch.object(sys, "argv", argv), patch.object(proof_worker, "STATE_PATH", path), patch(
+                        "tests.live.proof_worker.credentials", return_value=CONFIG), patch(
+                        "oci.object_storage.object_storage_client.Signer", return_value=SyntheticSigner()), patch(
+                        "oci.resource_manager.resource_manager_client.Signer", return_value=SyntheticSigner()), patch(
+                        "oci.loggingsearch.log_search_client.Signer", return_value=SyntheticSigner()), patch(
+                        "oci.base_client.OCIHTTPAdapter.send", side_effect=replies) as send:
+                    self.assertEqual(proof_worker.main(), 0)
+                self.assertEqual(send.call_count, 2)
+                for call in send.call_args_list:
+                    self.assertEqual(call.args[0].method, "POST")
+                    self.assertEqual(call.args[0].url.split("?")[0],
+                                     "https://logging.us-ashburn-1.oci.oraclecloud.com/20190909/search")
+                self.assertTrue(all(reply.raw.closed for reply in replies))
+                expected = dict(state, audit_counts=[1, 1], audit_window=[START.isoformat(), END.isoformat()])
+                self.assertEqual(store.read(), expected)
 
     def test_supervisor_emits_only_fixed_statuses_and_discards_both_output_streams(self):
         from tests.live.recovery_proof import audit_diagnostic_exits

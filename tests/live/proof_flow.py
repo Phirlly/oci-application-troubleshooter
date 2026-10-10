@@ -72,17 +72,17 @@ def advance(store, state, services, *, cleanup):
         _save(store, state, stack_status="deleted")
 
 
-def observe(store, state, services, *, processed_start=None, processed_minutes=60):
-    if type(processed_minutes) is not int or not 1 <= processed_minutes <= 60:
+def observe(store, state, services, *, search_start=None, search_minutes=60):
+    if type(search_minutes) is not int or not 1 <= search_minutes <= 60:
         raise ValueError("invalid_audit_window_duration")
     validate_state(state)
     if state["bucket_id"] is None:
         return
-    if processed_start is None:
+    if search_start is None:
         end = datetime.now(timezone.utc).replace(second=0, microsecond=0) + timedelta(minutes=1)
-        start = max(datetime.fromisoformat(state["started"]), end - timedelta(minutes=processed_minutes))
+        start = max(datetime.fromisoformat(state["started"]), end - timedelta(minutes=search_minutes))
     else:
-        start, end = processed_start, processed_start + timedelta(minutes=processed_minutes)
+        start, end = search_start, search_start + timedelta(minutes=search_minutes)
     ack = acknowledged_bucket(state)
     create = services.audit(ack, "CreateBucket", state["create_correlation"], start, end)
     delete = services.audit(ack, "DeleteBucket", state["delete_correlation"], start, end)
