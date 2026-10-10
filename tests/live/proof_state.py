@@ -52,10 +52,10 @@ def bucket_request(state):
 
 def validate_state(state):
     try:
-        from .proof_stack import ZIP_SHA256
+        from .proof_stack import ZIP_SHA256, LEGACY_ZIP_SHA256
         if type(state) is not dict or set(state) != FIELDS or type(state["schema"]) is not int or state["schema"] != 1:
             raise ProofStateError()
-        if state["zip_sha256"] != ZIP_SHA256:
+        if state["zip_sha256"] not in (ZIP_SHA256, LEGACY_ZIP_SHA256):
             raise ProofStateError()
         validate_scope(Scope(**state["scope"]))
         validate_request(bucket_request(state))

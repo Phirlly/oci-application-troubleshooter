@@ -1,4 +1,5 @@
 from copy import deepcopy
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -17,7 +18,8 @@ from tests.contract.oci_responses import CONFIG, OCI_IDENTITY, SyntheticSigner, 
 from tests.contract.test_oci_recovery_bucket import REQUEST
 from troubleshooter_deployment.recovery_bucket import BucketAcknowledgement, BucketObservation
 from troubleshooter_deployment.records import Identity
-from troubleshooter_deployment.codec import decode
+from troubleshooter_deployment.codec import decode, encode_receipt
+from troubleshooter_deployment.bucket_deletion import BucketDeleteIntent
 from troubleshooter_deployment.oci_audit import AuditScan
 
 
@@ -69,8 +71,15 @@ class Services:
         self.called("read_receipt")
         return self.receipt
 
-    def delete_bucket(self, ack, record, receipt, correlation):
+    def prepare_deletion(self, state, ack, record, receipt):
+        self.called("persist_deletion")
+        return BucketDeleteIntent(ack, receipt.removal_id, sha256(encode_receipt(receipt)).hexdigest(),
+                                  state["delete_correlation"], '"v1"')
+
+    def delete_bucket(self, ack, record, receipt, intent):
         assert self.store.state["bucket_status"] == "delete_uncertain"
+        assert type(intent) is BucketDeleteIntent
+        assert intent.ack == ack
         self.called("delete_bucket")
         from troubleshooter_deployment.records import DeleteAcknowledgement
         return DeleteAcknowledgement(ack.identity, record.receipt.removal_id)
@@ -98,6 +107,7 @@ class ProofFlowTests(unittest.TestCase):
         calls = self.services.calls
         self.assertLess(calls.index("create_stack"), calls.index("create_bucket"))
         self.assertLess(calls.index("read_receipt"), calls.index("delete_bucket"))
+        self.assertLess(calls.index("persist_deletion"), calls.index("delete_bucket"))
         advance(self.store, self.state, self.services, cleanup=True)
         self.assertEqual(self.state["stack_status"], "deleted")
         self.assertEqual(self.services.calls.count("create_stack"), 1)
@@ -478,5 +488,5 @@ class ProofWorkerContractTests(unittest.TestCase):
                 self.assertEqual(creds.call_count, 4)
             self.assertEqual(sum(method == "POST" for method, path in methods), 2)
             self.assertEqual(sum(method == "DELETE" for method, path in methods), 2)
-            self.assertEqual(sum(method == "PUT" for method, path in methods), 1)
+            self.assertEqual(sum(method == "PUT" for method, path in methods), 2)
             self.assertNotIn(("POST", "/20180917/jobs"), methods)

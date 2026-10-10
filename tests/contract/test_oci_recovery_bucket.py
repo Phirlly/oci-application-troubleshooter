@@ -1,9 +1,12 @@
 from dataclasses import replace
+from hashlib import sha256
 import json
 import unittest
 from unittest.mock import patch
 
 from troubleshooter_deployment.cleanup import prepare_purge
+from troubleshooter_deployment.bucket_deletion import BucketDeleteIntent
+from troubleshooter_deployment.codec import encode_receipt
 from troubleshooter_deployment.policy import bootstrap
 from troubleshooter_deployment.recovery_bucket import BucketRequest, BucketAcknowledgement, metadata
 from troubleshooter_deployment.oci_recovery_bucket import OciRecoveryBucket, BucketError, BucketUncertain
@@ -28,6 +31,8 @@ class RecoveryBucketTests(unittest.TestCase):
         self.addCleanup(self.store.close)
         self.send = patch("oci.base_client.OCIHTTPAdapter.send").start()
         self.record = prepare_purge(bootstrap(OCI_IDENTITY, OCI_IDENTITY, ATTEMPT), REMOVAL)
+        self.intent = BucketDeleteIntent(ACK, REMOVAL, sha256(encode_receipt(self.record.receipt)).hexdigest(),
+                                         "b" * 32, '"revision-1"')
 
     def test_namespace_create_and_independent_get_exact_requests(self):
         self.send.side_effect = [response("synthetic-ns"), response(bucket()),
@@ -56,15 +61,19 @@ class RecoveryBucketTests(unittest.TestCase):
 
     def test_delete_requires_receipt_identity_then_fresh_etag(self):
         self.send.side_effect = [response(bucket(), headers={"etag": '"new"'}),
+                                 response(bucket(), headers={"etag": '"new"'}),
                                  response(body=b"", status=204)]
-        result = self.store.delete_empty(ACK, self.record, self.record.receipt, "b" * 32)
+        intent = self.store.prepare_delete(ACK, self.record, self.record.receipt, "b" * 32)
+        self.assertEqual(intent, replace(self.intent, if_match='"new"'))
+        self.assertEqual(self.send.call_count, 1)
+        result = self.store.delete_empty(ACK, self.record, self.record.receipt, intent)
         self.assertEqual(result.identity, OCI_IDENTITY)
         self.assertEqual(result.removal_id, REMOVAL)
         calls = [c.args[0] for c in self.send.call_args_list]
-        self.assertEqual([c.method for c in calls], ["GET", "DELETE"])
+        self.assertEqual([c.method for c in calls], ["GET", "GET", "DELETE"])
         self.assertTrue(calls[0].url.endswith("/synthetic-bucket?fields=autoTiering"))
-        self.assertEqual(calls[1].headers["if-match"], '"new"')
-        self.assertEqual(calls[1].headers["opc-client-request-id"], "b" * 32)
+        self.assertEqual(calls[2].headers["if-match"], '"new"')
+        self.assertEqual(calls[2].headers["opc-client-request-id"], "b" * 32)
 
     def test_delete_blocks_missing_receipt_or_mismatched_identity_before_requests(self):
         for ack, record, readback, correlation in [
@@ -76,8 +85,20 @@ class RecoveryBucketTests(unittest.TestCase):
             (ACK, self.record, self.record.receipt, REQUEST.correlation),
         ]:
             with self.assertRaises(BucketError):
-                self.store.delete_empty(ack, record, readback, correlation)
+                self.store.prepare_delete(ack, record, readback, correlation)
+            with self.assertRaises(BucketError):
+                self.store.delete_empty(ack, record, readback, replace(self.intent, correlation=correlation))
+        for intent in (None, "b" * 32, replace(self.intent, receipt_sha256="0" * 64),
+                       replace(self.intent, ack=replace(ACK, request=replace(REQUEST, name="other")))):
+            with self.assertRaises(BucketError):
+                self.store.delete_empty(ACK, self.record, self.record.receipt, intent)
         self.send.assert_not_called()
+
+    def test_changed_etag_is_not_refreshed_and_no_delete_is_dispatched(self):
+        self.send.side_effect = [response(bucket(), headers={"etag": '"changed"'})]
+        with self.assertRaises(BucketError):
+            self.store.delete_empty(ACK, self.record, self.record.receipt, self.intent)
+        self.assertEqual([c.args[0].method for c in self.send.call_args_list], ["GET"])
 
     def test_no_adoption_on_create_conflict_denied_or_lost_response(self):
         for reply in [OSError("synthetic-secret")] + [
@@ -99,7 +120,7 @@ class RecoveryBucketTests(unittest.TestCase):
             self.send.reset_mock()
             self.send.side_effect = [response(bucket()), reply]
             with self.assertRaises(BucketUncertain):
-                self.store.delete_empty(ACK, self.record, self.record.receipt, "b" * 32)
+                self.store.delete_empty(ACK, self.record, self.record.receipt, self.intent)
             self.assertEqual(self.send.call_count, 2)
 
     def test_changed_or_unavailable_bucket_blocks_delete(self):
@@ -115,7 +136,7 @@ class RecoveryBucketTests(unittest.TestCase):
             self.send.reset_mock()
             self.send.side_effect = [reply]
             with self.assertRaises(BucketError):
-                self.store.delete_empty(ACK, self.record, self.record.receipt, "b" * 32)
+                self.store.delete_empty(ACK, self.record, self.record.receipt, self.intent)
             self.assertEqual(self.send.call_count, 1)
 
     def test_invalid_inputs_are_rejected_before_dispatch(self):

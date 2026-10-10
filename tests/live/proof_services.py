@@ -3,7 +3,7 @@ from contextlib import ExitStack
 
 from troubleshooter_deployment.oci_audit import OciBucketAudit
 from troubleshooter_deployment.oci_receipt import OciReceiptStore
-from troubleshooter_deployment.oci_recovery_bucket import OciRecoveryBucket
+from troubleshooter_deployment.oci_recovery_bucket import OciRecoveryBucket, BucketError
 from .proof_stack import ProofStack
 
 
@@ -43,8 +43,21 @@ class ProofServices:
     def check_bucket(self, ack):
         return self.bucket.read(ack)
 
-    def delete_bucket(self, ack, record, receipt, correlation):
-        return self.bucket.delete_empty(ack, record, receipt, correlation)
+    def prepare_deletion(self, state, ack, record, receipt):
+        store = OciReceiptStore(self.config, ack.identity, state["stack_id"])
+        try:
+            intent = store.read_deletion(receipt)
+            if intent is None:
+                intent = self.bucket.prepare_delete(ack, record, receipt, state["delete_correlation"])
+                intent = store.persist_deletion(record, intent)
+            if intent.ack != ack or intent.correlation != state["delete_correlation"]:
+                raise BucketError()
+            return intent
+        finally:
+            store.close()
+
+    def delete_bucket(self, ack, record, receipt, intent):
+        return self.bucket.delete_empty(ack, record, receipt, intent)
 
     def persist(self, state, record):
         store = OciReceiptStore(self.config, record.identity, state["stack_id"])

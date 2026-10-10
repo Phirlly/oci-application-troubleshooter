@@ -3,10 +3,14 @@
 The caller durably freezes intent before dispatch and retains uncertainty.
 No adoption, implicit retry, object deletion or lost-response reconciliation.
 """
+from hashlib import sha256
+
 from oci.object_storage.models import Bucket, CreateBucketDetails
 from oci.retry import NoneRetryStrategy
 
 from .cleanup import may_purge
+from .bucket_deletion import BucketDeleteIntent, encode_intent
+from .codec import encode_receipt
 from .oci_client import bounded_client
 from .oci_transport import oci_operation, strong_etag
 from .records import DeleteAcknowledgement, Identity
@@ -114,8 +118,8 @@ class OciRecoveryBucket:
         except Exception:
             raise BucketError() from None
 
-    def delete_empty(self, ack, record, durable_readback, correlation):
-        dispatched = False
+    def prepare_delete(self, ack, record, durable_readback, correlation):
+        """Read only: the returned intent still needs independent persistence."""
         try:
             validate_acknowledgement(ack)
             require_text(correlation, r"[0-9a-f]{32}")
@@ -124,10 +128,30 @@ class OciRecoveryBucket:
                 raise BucketError()
             with oci_operation():
                 observed = self._read(ack)
+            intent = BucketDeleteIntent(ack, record.receipt.removal_id,
+                                        sha256(encode_receipt(record.receipt)).hexdigest(),
+                                        correlation, observed.revision)
+            encode_intent(intent, durable_readback)
+            return intent
+        except Exception:
+            raise BucketError() from None
+
+    def delete_empty(self, ack, record, durable_readback, durable_intent):
+        """Caller supplies independent readback and saves uncertainty before calling."""
+        dispatched = False
+        try:
+            encode_intent(durable_intent, durable_readback)
+            if (durable_intent.ack != ack or record.identity != ack.identity
+                    or not may_purge(record, durable_readback)):
+                raise BucketError()
+            with oci_operation():
+                observed = self._read(ack)
+                if observed.revision != durable_intent.if_match:
+                    raise BucketError()
                 dispatched = True
                 result = self._client.delete_bucket(
-                    ack.request.namespace, ack.request.name, if_match=observed.revision,
-                    opc_client_request_id=correlation, retry_strategy=NoneRetryStrategy(),
+                    ack.request.namespace, ack.request.name, if_match=durable_intent.if_match,
+                    opc_client_request_id=durable_intent.correlation, retry_strategy=NoneRetryStrategy(),
                 )
                 if result.status != 204:
                     raise BucketUncertain()

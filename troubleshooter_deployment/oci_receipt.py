@@ -10,7 +10,8 @@ from oci.exceptions import ServiceError
 from oci.resource_manager.models import UpdateStackDetails
 from oci.retry import NoneRetryStrategy
 
-from .codec import MAX_BYTES, encode, validate_identity
+from .bucket_deletion import encode_intent, merge_deletion, read_deletion
+from .codec import MAX_BYTES, encode, encode_receipt, validate_identity
 from .oci_client import bounded_client
 from .oci_transport import oci_operation, strong_etag
 from .receipt_variables import merge_receipt, read_receipt
@@ -60,7 +61,8 @@ class OciReceiptStore:
         receipt = read_receipt(variables)
         if receipt is not None and receipt.identity != self._identity:
             raise ReceiptError()
-        return revision, variables, receipt
+        deletion = read_deletion(variables)
+        return revision, variables, receipt, deletion
 
     def _get(self):
         return self._observed(self._client.get_stack(self._stack_id, retry_strategy=NoneRetryStrategy()))
@@ -68,22 +70,51 @@ class OciReceiptStore:
     def read(self):
         try:
             with oci_operation():
-                _, _, receipt = self._get()
+                _, _, receipt, _ = self._get()
             return receipt
         except Exception:
             # A missing/denied stack never means an absent receipt.
             raise ReceiptError() from None
 
     def persist(self, record):
+        return self._persist(record)[0]
+
+    def read_deletion(self, receipt):
+        try:
+            encode_receipt(receipt)
+            if receipt.identity != self._identity:
+                raise ReceiptError()
+            with oci_operation():
+                _, _, observed, deletion = self._get()
+                if observed != receipt:
+                    raise ReceiptError()
+            return deletion
+        except Exception:
+            raise ReceiptError() from None
+
+    def persist_deletion(self, record, intent):
+        try:
+            encode(record)
+            encode_intent(intent, record.receipt)
+        except Exception:
+            raise ReceiptError() from None
+        return self._persist(record, intent)[1]
+
+    def _persist(self, record, intent=None):
         dispatched = False
         try:
             encode(record)
             if record.identity != self._identity or record.receipt is None:
                 raise ReceiptError()
             with oci_operation():
-                revision, variables, existing = self._get()
-                merged = merge_receipt(variables, record.receipt)
-                if existing is None:
+                revision, variables, existing, deletion = self._get()
+                if intent is None:
+                    merged = merge_receipt(variables, record.receipt)
+                else:
+                    if existing != record.receipt:
+                        raise ReceiptError()
+                    merged = merge_deletion(variables, intent)
+                if merged != variables:
                     # Match the pinned BaseClient's JSON serialization bound.
                     if len(json.dumps({"variables": merged}).encode("utf-8")) > MAX_BYTES:
                         raise ReceiptError()
@@ -97,14 +128,15 @@ class OciReceiptStore:
                         if error.status == 412:
                             raise ReceiptConflict() from None
                         raise
-                    _, acknowledged, _ = self._observed(result)
+                    _, acknowledged, _, _ = self._observed(result)
                     if acknowledged != merged:
                         raise ReceiptUncertain()
-                    _, observed, existing = self._get()
-                    if observed != merged or existing != record.receipt:
+                    _, observed, existing, deletion = self._get()
+                    if (observed != merged or existing != record.receipt
+                            or (intent is not None and deletion != intent)):
                         raise ReceiptUncertain()
             # Always comes from an independent GET, never the PUT acknowledgement.
-            return existing
+            return existing, deletion
         except ReceiptConflict:
             raise
         except Exception:

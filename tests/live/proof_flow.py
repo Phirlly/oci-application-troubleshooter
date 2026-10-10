@@ -7,6 +7,7 @@ from troubleshooter_deployment.policy import bootstrap
 from troubleshooter_deployment.records import Attempt, Identity
 from troubleshooter_deployment.recovery_bucket import BucketAcknowledgement
 from .proof_state import bucket_request, validate_state
+from .proof_stack import require_current_fixture
 
 # Synthetic local fixture provenance. This is NOT a GitHub attempt observation.
 PROOF_ATTEMPT = Attempt(1, 1, "0" * 40, "0" * 40)
@@ -24,6 +25,7 @@ def _save(store, state, **changes):
 
 def advance(store, state, services, *, cleanup):
     validate_state(state)
+    require_current_fixture(state)
     if (state["stack_status"] in {"uncertain", "delete_uncertain", "deleted"}
             or state["bucket_status"] in {"uncertain", "delete_uncertain"}):
         return
@@ -54,8 +56,9 @@ def advance(store, state, services, *, cleanup):
         if receipt != record.receipt:
             return
         _save(store, state, receipt_status="confirmed")
+        intent = services.prepare_deletion(state, ack, record, receipt)
         _save(store, state, bucket_status="delete_uncertain")
-        result = services.delete_bucket(ack, record, receipt, state["delete_correlation"])
+        result = services.delete_bucket(ack, record, receipt, intent)
         if completion(record.receipt, receipt, result) != "complete":
             return
         _save(store, state, bucket_status="deleted")

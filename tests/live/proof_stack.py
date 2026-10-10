@@ -10,12 +10,13 @@ from oci.retry import NoneRetryStrategy
 from troubleshooter_deployment.oci_client import bounded_client
 from troubleshooter_deployment.oci_transport import oci_operation, strong_etag
 from troubleshooter_deployment.recovery_bucket import require_text
+from troubleshooter_deployment.bucket_deletion import KEY
 
 
 def fixture_zip():
     # Deterministic, provider/resource-free request bytes. No Apply is submitted.
     variables = ("troubleshooter_cleanup_receipt_0", "troubleshooter_cleanup_receipt_1",
-                 "troubleshooter_cleanup_receipt_sha256")
+                 "troubleshooter_cleanup_receipt_sha256", KEY)
     text = "\n".join(f'variable "{name}" {{\n  type = string\n  default = ""\n}}\n' for name in variables)
     stream = BytesIO()
     with zipfile.ZipFile(stream, "w") as archive:
@@ -24,11 +25,17 @@ def fixture_zip():
 
 
 ZIP_SHA256 = sha256(fixture_zip()).hexdigest()  # Local request provenance, not remote attestation.
+LEGACY_ZIP_SHA256 = "98748d87f14e9a5a9dc351aabbb41176ad144f1850d66528b78c8229d54b586f"
 
 
 class StackError(RuntimeError):
     def __init__(self):
         super().__init__("proof_stack_unavailable_or_unconfirmed")
+
+
+def require_current_fixture(state):
+    if state["zip_sha256"] != ZIP_SHA256:
+        raise StackError()
 
 
 class ProofStack:
@@ -56,6 +63,7 @@ class ProofStack:
 
     def create(self, state):
         try:
+            require_current_fixture(state)
             details = CreateStackDetails(
                 compartment_id=state["scope"]["compartment_id"], display_name=state["stack_name"],
                 freeform_tags={"recovery_proof": state["epoch"]}, variables={},
