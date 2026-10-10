@@ -24,7 +24,10 @@ def check(engine):
         workspace = Path(directory)
         workspace.chmod(0o755)
         shutil.copyfile(ROOT / "terraform" / "variables.tf", workspace / "variables.tf")
+        # These disposable synthetic inputs must be readable by the container UID.
+        (workspace / "variables.tf").chmod(0o644)
         (workspace / "empty.tfrc").write_text("")
+        (workspace / "empty.tfrc").chmod(0o644)
         if engine == "podman":
             command = ["podman", "run", "--rm", "--pull=never", "--network=none", "--read-only",
                        "--cap-drop=ALL", "--security-opt=no-new-privileges", "--user=65534:65534",
@@ -69,6 +72,7 @@ def check(engine):
         cases.append((example, False, "Set compartment_ocid"))
         for values, succeeds, diagnostic in cases:
             (workspace / "deployment.tfvars.json").write_text(json.dumps(values))
+            (workspace / "deployment.tfvars.json").chmod(0o644)
             run("plan", "-input=false", "-lock=false", "-refresh=false", "-no-color",
                 "-var-file=deployment.tfvars.json", succeeds=succeeds, diagnostic=diagnostic)
     print(f"PASS: Terraform {version}, {engine}, fmt/init/validate and {len(cases)} input cases; no resources/providers.")
