@@ -1,0 +1,138 @@
+{
+  "name": "Application package",
+  "on": {
+    "push": {
+      "branches": [
+        "dev",
+        "main"
+      ]
+    },
+    "pull_request": {
+      "branches": [
+        "dev",
+        "main"
+      ]
+    }
+  },
+  "permissions": {
+    "contents": "read"
+  },
+  "concurrency": {
+    "group": "package-${{ github.ref }}",
+    "cancel-in-progress": true
+  },
+  "jobs": {
+    "package": {
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 20,
+      "env": {
+        "UV_HTTP_TIMEOUT": "30",
+        "UV_HTTP_RETRIES": "1",
+        "NPM_CONFIG_USERCONFIG": "/dev/null",
+        "NPM_CONFIG_REGISTRY": "https://registry.npmjs.org",
+        "NPM_CONFIG_FETCH_TIMEOUT": "30000",
+        "NPM_CONFIG_FETCH_RETRIES": "1",
+        "NPM_CONFIG_UPDATE_NOTIFIER": "false"
+      },
+      "steps": [
+        {
+          "name": "Checkout exact source",
+          "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "with": {
+            "ref": "${{ github.sha }}",
+            "persist-credentials": false
+          }
+        },
+        {
+          "name": "Set up locked Python tooling",
+          "uses": "astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9",
+          "with": {
+            "version": "0.13.0",
+            "python-version": "3.12.15",
+            "enable-cache": false
+          }
+        },
+        {
+          "name": "Set up exact Node version",
+          "uses": "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
+          "with": {
+            "node-version": "24.21.0",
+            "architecture": "x64",
+            "package-manager-cache": false
+          }
+        },
+        {
+          "id": "python_dependencies",
+          "name": "Install locked Python wheels",
+          "timeout-minutes": 5,
+          "run": "uv sync --locked --no-build --python 3.12.15"
+        },
+        {
+          "id": "python_checks",
+          "name": "Test Python behavior and coverage",
+          "timeout-minutes": 5,
+          "run": ".venv/bin/coverage run -m unittest discover -s tests\n.venv/bin/coverage report --fail-under=98\n.venv/bin/python -m compileall -q troubleshooter_deployment troubleshooter_app tests"
+        },
+        {
+          "id": "python_audit",
+          "name": "Audit Python dependencies",
+          "timeout-minutes": 2,
+          "run": "uv audit --frozen"
+        },
+        {
+          "id": "frontend_dependencies",
+          "name": "Install locked public frontend dependencies",
+          "working-directory": "frontend",
+          "timeout-minutes": 5,
+          "run": "npm ci --ignore-scripts --no-audit --no-fund"
+        },
+        {
+          "id": "frontend_build",
+          "name": "Build frontend and its license notices",
+          "working-directory": "frontend",
+          "timeout-minutes": 3,
+          "run": "npm run typecheck\nnpm run build\nnode ../container/frontend_notices.mjs"
+        },
+        {
+          "id": "frontend_audit",
+          "name": "Audit frontend dependencies",
+          "working-directory": "frontend",
+          "timeout-minutes": 2,
+          "run": "npm audit --audit-level=low"
+        },
+        {
+          "id": "browser_install",
+          "name": "Install locked browser and Linux libraries",
+          "working-directory": "frontend",
+          "timeout-minutes": 5,
+          "run": "./node_modules/.bin/playwright install --with-deps chromium"
+        },
+        {
+          "id": "browser_tests",
+          "name": "Verify built HTTPS presenter experience",
+          "working-directory": "frontend",
+          "timeout-minutes": 4,
+          "run": "npm run test:browser -- --forbid-only --global-timeout=180000"
+        },
+        {
+          "id": "image_build",
+          "name": "Build actual application image with Podman",
+          "timeout-minutes": 8,
+          "run": "podman build --platform linux/amd64 --no-cache --iidfile .cache/presenter-image.id --file Containerfile ."
+        },
+        {
+          "id": "image_smoke",
+          "name": "Verify isolated image startup and persistent sessions",
+          "timeout-minutes": 5,
+          "run": ".venv/bin/python tests/integration/check_presenter_image.py --image-id-file .cache/presenter-image.id"
+        },
+        {
+          "id": "unchanged_inputs",
+          "name": "Verify dependency inputs were not regenerated",
+          "timeout-minutes": 1,
+          "run": "git diff --exit-code -- pyproject.toml uv.lock frontend/package.json frontend/package-lock.json"
+        }
+      ]
+    }
+  }
+}
