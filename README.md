@@ -4,8 +4,9 @@ See an agent diagnose a checkout failure using real OCI logs and metrics,
 propose a repair, and verify recovery after your approval.
 
 **Status: in development.** Deployment recovery and OCI/GitHub integrations have
-offline tests. Terraform target inputs are defined; workload resources and the
-GitHub workflow are not implemented. The demo is not runnable yet.
+offline tests. A development GitHub workflow initializes or resumes the recovery
+journal; hosted execution is unverified. Workload resources, Deploy, Verify and
+Destroy are not implemented. The demo is not runnable yet.
 
 ## Configure once
 
@@ -18,10 +19,19 @@ Use your own GitHub repository or a configured team repository. Supply:
 
 Keep region and compartment together using
 [deployment.tfvars.json.example](terraform/deployment.tfvars.json.example).
-For the planned GitHub workflow, replace the compartment placeholder and save
-the JSON as Environment secret `DEPLOYMENT_TFVARS_JSON`. Store credentials
-separately in GitHub Secrets; never put keys or passwords in tfvars or commit
-your actual configuration. Region availability and permissions require preflight.
+Replace the compartment placeholder and save the JSON as `DEPLOYMENT_TFVARS_JSON`
+in GitHub's `demo` Environment. Store `OCI_TENANCY_OCID`, `OCI_USER_OCID`,
+`OCI_FINGERPRINT` and `OCI_PRIVATE_KEY` there separately. Restrict this environment
+to the reviewed `main` branch; remove same-name repository/organization secret
+fallbacks. Never commit actual configuration or put credentials in tfvars.
+Region availability and permissions require preflight.
+
+The development bootstrap workflow is for isolated testing only. It retains an
+empty Resource Manager stack and reports `BOOTSTRAP_VERIFIED`, not demo readiness.
+Retain its GitHub deployment history and rerun the same commit for recovery.
+Changing the release or an expired, unconfirmed creation can leave recovery
+pending. Automated removal is not available yet; arrange fixture cleanup before
+testing. OpenAI and presenter secrets are not consumed by this bootstrap proof.
 
 After setup, the intended experience uses only GitHub Actions and
 the demo page—no local Terraform, Cloud Shell, SSH or manual service wiring.

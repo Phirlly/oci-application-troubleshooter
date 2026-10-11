@@ -18,7 +18,7 @@ from tests.contract.test_oci_stack_bootstrap import CREATED, NOW, STACK_ID, stac
 from tests.deployment.fixtures import ATTEMPT, NEXT_ATTEMPT
 
 
-class RunnerBootstrapTests(unittest.TestCase):
+class BootstrapHttpService(unittest.TestCase):
     """Actual coordinator/adapters/SDK; only the two HTTP boundaries are synthetic."""
 
     def setUp(self):
@@ -118,6 +118,8 @@ class RunnerBootstrapTests(unittest.TestCase):
         for private in [CONFIG["user"], CONFIG["tenancy"], "private-create-reply", "private-gh-token"]:
             self.assertNotIn(private, repr(result))
 
+
+class RunnerBootstrapTests(BootstrapHttpService):
     def test_new_enrollment_publishes_and_reads_before_one_exact_create(self):
         result = self.run_controller()
         self.assertEqual(result.stack_id, STACK_ID)

@@ -1,0 +1,48 @@
+{
+  "name": "Demo bootstrap (development only)",
+  "on": {"workflow_dispatch": {}},
+  "permissions": {},
+  "concurrency": {
+    "group": "oci-application-troubleshooter-demo",
+    "cancel-in-progress": false
+  },
+  "jobs": {
+    "bootstrap": {
+      "if": "${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}",
+      "runs-on": "ubuntu-24.04",
+      "environment": "demo",
+      "timeout-minutes": 10,
+      "permissions": {"contents": "read", "actions": "read", "deployments": "write"},
+      "steps": [
+        {
+          "name": "Check out the triggering release",
+          "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "with": {"ref": "${{ github.sha }}", "persist-credentials": false}
+        },
+        {
+          "name": "Install pinned tooling",
+          "uses": "astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9",
+          "with": {"version": "0.12.19", "python-version": "3.12.15", "enable-cache": false}
+        },
+        {
+          "name": "Install locked runtime dependencies",
+          "run": "uv sync --locked --no-build --no-dev --python 3.12.15",
+          "shell": "bash"
+        },
+        {
+          "name": "Initialize or resume the deployment journal",
+          "run": ".venv/bin/python -B -m troubleshooter_deployment.github_runner",
+          "shell": "bash",
+          "env": {
+            "GITHUB_TOKEN": "${{ github.token }}",
+            "DEPLOYMENT_TFVARS_JSON": "${{ secrets.DEPLOYMENT_TFVARS_JSON }}",
+            "OCI_TENANCY_OCID": "${{ secrets.OCI_TENANCY_OCID }}",
+            "OCI_USER_OCID": "${{ secrets.OCI_USER_OCID }}",
+            "OCI_FINGERPRINT": "${{ secrets.OCI_FINGERPRINT }}",
+            "OCI_PRIVATE_KEY": "${{ secrets.OCI_PRIVATE_KEY }}"
+          }
+        }
+      ]
+    }
+  }
+}
