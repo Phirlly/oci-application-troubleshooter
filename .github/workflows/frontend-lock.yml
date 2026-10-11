@@ -39,11 +39,11 @@
         },
         {
           "name": "Resolve public npm lock without lifecycle scripts",
-          "run": "podman run --rm --timeout 300 --userns keep-id --user \"$(id -u):$(id -g)\" --read-only --tmpfs /tmp:rw,noexec,nosuid,size=128m --cap-drop ALL --security-opt no-new-privileges --volume \"$GITHUB_WORKSPACE/frontend:/frontend:rw\" --workdir /frontend --env HOME=/tmp --env NPM_CONFIG_USERCONFIG=/dev/null --env NPM_CONFIG_CACHE=/tmp/npm docker.io/library/node@sha256:51b1100cc2a83d370c6a60952e3f2989c8a43159d0e38586e090f3b3326efefd npm install --no-audit --no-fund --package-lock-only --ignore-scripts --registry=https://registry.npmjs.org --fetch-retries=1 --fetch-timeout=20000"
+          "run": "podman run --rm --timeout 300 --userns keep-id --user \"$(id -u):$(id -g)\" --read-only --tmpfs /tmp:rw,noexec,nosuid,size=1g --cap-drop ALL --security-opt no-new-privileges --volume \"$GITHUB_WORKSPACE/frontend:/frontend:rw\" --workdir /frontend --env HOME=/tmp --env NPM_CONFIG_USERCONFIG=/dev/null --env NPM_CONFIG_CACHE=/tmp/npm docker.io/library/node@sha256:51b1100cc2a83d370c6a60952e3f2989c8a43159d0e38586e090f3b3326efefd npm install --no-audit --no-fund --package-lock-only --ignore-scripts --registry=https://registry.npmjs.org --fetch-retries=1 --fetch-timeout=20000"
         },
         {
           "name": "Audit resolved dependency graph",
-          "run": "podman run --rm --timeout 60 --userns keep-id --user \"$(id -u):$(id -g)\" --read-only --tmpfs /tmp:rw,noexec,nosuid,size=128m --cap-drop ALL --security-opt no-new-privileges --volume \"$GITHUB_WORKSPACE/frontend:/frontend:ro\" --workdir /frontend --env HOME=/tmp --env NPM_CONFIG_USERCONFIG=/dev/null --env NPM_CONFIG_CACHE=/tmp/npm docker.io/library/node@sha256:51b1100cc2a83d370c6a60952e3f2989c8a43159d0e38586e090f3b3326efefd npm audit --audit-level=low --package-lock-only --ignore-scripts --registry=https://registry.npmjs.org --fetch-retries=1 --fetch-timeout=20000"
+          "run": "podman run --rm --timeout 60 --userns keep-id --user \"$(id -u):$(id -g)\" --read-only --tmpfs /tmp:rw,noexec,nosuid,size=1g --cap-drop ALL --security-opt no-new-privileges --volume \"$GITHUB_WORKSPACE/frontend:/frontend:ro\" --workdir /frontend --env HOME=/tmp --env NPM_CONFIG_USERCONFIG=/dev/null --env NPM_CONFIG_CACHE=/tmp/npm docker.io/library/node@sha256:51b1100cc2a83d370c6a60952e3f2989c8a43159d0e38586e090f3b3326efefd npm audit --audit-level=low --package-lock-only --ignore-scripts --registry=https://registry.npmjs.org --fetch-retries=1 --fetch-timeout=20000"
         },
         {
           "name": "Save only the public dependency lock",

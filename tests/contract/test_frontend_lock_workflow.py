@@ -54,6 +54,7 @@ class FrontendLockWorkflowTests(unittest.TestCase):
                 self.assertEqual(args[args.index(flag) + 1], value)
             self.assertEqual(args.count('--volume'), 1)
             self.assertIn('--read-only', args)
+            self.assertEqual(args[args.index('--tmpfs') + 1], '/tmp:rw,noexec,nosuid,size=1g')
             self.assertIn('NPM_CONFIG_USERCONFIG=/dev/null', args)
             self.assertIn('NPM_CONFIG_CACHE=/tmp/npm', args)
             self.assertIn('docker.io/library/node@sha256:51b1100cc2a83d370c6a60952e3f2989c8a43159d0e38586e090f3b3326efefd', args)
