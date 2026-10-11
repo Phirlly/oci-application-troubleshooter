@@ -21,7 +21,7 @@ class DemoWorkflowTests(unittest.TestCase):
             "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
             "astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9"])
         self.assertEqual(steps[0]["with"], {"ref": "${{ github.sha }}", "persist-credentials": False})
-        self.assertEqual(steps[1]["with"], {"version": "0.12.19", "python-version": "3.12.15", "enable-cache": False})
+        self.assertEqual(steps[1]["with"], {"version": "0.13.0", "python-version": "3.12.15", "enable-cache": False})
         self.assertNotIn("secrets.", json.dumps(steps[:-1]))
         self.assertEqual(set(steps[-1]["env"]), {"GITHUB_TOKEN", "DEPLOYMENT_TFVARS_JSON", "OCI_TENANCY_OCID",
                                                "OCI_USER_OCID", "OCI_FINGERPRINT", "OCI_PRIVATE_KEY"})
