@@ -25,6 +25,17 @@ class BudgetTests(unittest.TestCase):
             with self.assertRaises(BudgetError), operation_budget():
                 pass
 
+    def test_intermediate_checks_use_original_deadline_without_extending_it(self):
+        with patch("troubleshooter_deployment.request_budget.monotonic") as clock:
+            clock.return_value = 100
+            with self.assertRaises(BudgetError), operation_budget() as check_deadline:
+                clock.return_value = 119
+                check_deadline()
+                clock.return_value = 120
+                check_deadline()
+                self.fail("Expired budget permitted more work")
+        self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+
     def test_refuses_thread_nested_alarm_and_invalid_budget_before_work(self):
         def enter():
             with operation_budget():

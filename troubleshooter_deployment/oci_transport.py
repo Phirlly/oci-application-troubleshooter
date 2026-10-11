@@ -36,11 +36,11 @@ def strong_etag(value):
 def oci_operation():
     # NoneRetryStrategy does not disable this independent BaseClient retry path.
     key = "OCI_HEADER_PARSING_ERROR_MAX_RETRIES"
-    with operation_budget():
+    with operation_budget() as check_deadline:
         previous = os.environ.get(key)
         os.environ[key] = "0"
         try:
-            yield
+            yield check_deadline
         finally:
             if previous is None:
                 os.environ.pop(key, None)

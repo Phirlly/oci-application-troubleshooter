@@ -14,6 +14,7 @@ from .oci_stack_bootstrap import InitialStackAcknowledgement
 from .oci_transport import oci_operation, strong_etag
 from .receipt_variables import read_receipt
 from .recovery_bucket import require_text
+from .request_budget import BudgetError
 from .stack_bootstrap import BOOTSTRAP_VARIABLE, validate_initial_stack
 
 
@@ -91,7 +92,7 @@ class OciBucketBootstrapStore:
         The caller must not use an already-present marker as dispatch permission.
         """
         try:
-            with oci_operation():
+            with oci_operation() as check_deadline:
                 current, before = self._get()
                 if type(expected) is not BootstrapSnapshot or current != expected:
                     raise BootstrapStoreError()
@@ -100,11 +101,15 @@ class OciBucketBootstrapStore:
                 try:
                     self._client.update_stack(self._anchor.stack_id, UpdateStackDetails(freeform_tags=tags),
                         if_match=current.revision, retry_strategy=NoneRetryStrategy())
+                except BudgetError:
+                    raise
                 except ServiceError as error:
                     if error.status == 412:
                         raise BootstrapStoreError() from None
                 except Exception:
                     pass  # Unknown dispatch outcome; only the next exact GET can confirm it.
+                # A lower layer may wrap the alarm. Do not start readback after expiry.
+                check_deadline()
                 saved, after = self._get()
                 if (saved.record != record or after["freeformTags"] != tags
                         or any(after.get(k) != before.get(k)

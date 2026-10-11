@@ -15,6 +15,7 @@ class BudgetError(RuntimeError):
 
 @contextmanager
 def operation_budget(seconds=20):
+    """Yield a check of this operation's original deadline; never renew it."""
     if (not SUPPORTED or current_thread() is not main_thread()
             or type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds <= 0
             or signal.getitimer(signal.ITIMER_REAL) != (0.0, 0.0)):
@@ -27,13 +28,16 @@ def operation_budget(seconds=20):
     def expired(signum, frame):
         raise BudgetError()
 
+    def check_deadline():
+        if monotonic() - started >= seconds:
+            raise BudgetError()
+
     signal.signal(signal.SIGALRM, expired)
     try:
         signal.setitimer(signal.ITIMER_REAL, seconds)
-        yield
+        yield check_deadline
         # C work can defer the handler. Never accept a late successful result.
-        if monotonic() - started >= seconds:
-            raise BudgetError()
+        check_deadline()
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous)

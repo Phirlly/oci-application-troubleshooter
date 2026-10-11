@@ -1,12 +1,17 @@
 from copy import deepcopy
 from dataclasses import replace
+from functools import partial
 import json
+import os
+import signal
+from time import sleep
 from unittest.mock import patch
 
 from troubleshooter_deployment.bucket_bootstrap import PREFIX, acknowledge, enroll
 from troubleshooter_deployment.oci_bucket_bootstrap import OciBucketBootstrapStore, BootstrapStoreError
 from troubleshooter_deployment.recovery_bucket import BucketAcknowledgement
 from troubleshooter_deployment.records import Identity
+from troubleshooter_deployment.request_budget import BudgetError, operation_budget
 from tests.contract.recovery_store_service import RecoveryStoreService
 from tests.contract.oci_responses import CONFIG, response
 from tests.contract.test_oci_stack_bootstrap import STACK_ID
@@ -114,3 +119,68 @@ class OciBucketBootstrapTests(RecoveryStoreService):
         with patch.object(client._client.base_client.session, "close", side_effect=OSError("secret")):
             with self.assertRaisesRegex(BootstrapStoreError, "bucket_bootstrap"):
                 client.close()
+
+    def test_direct_budget_failure_does_not_read_back_or_confirm_update(self):
+        client = self.client()
+        observed = client.read()
+        state = enroll(self.initial, STACK_ID, "synthetic-ns", ATTEMPT, NOW)
+
+        def expired_after_write(request, **kwargs):
+            result = self.send(request, **kwargs)
+            if request.method == "PUT":
+                raise BudgetError()
+            return result
+
+        self.transport.side_effect = expired_after_write
+        self.calls.clear()
+        with self.assertRaisesRegex(BootstrapStoreError, "^bucket_bootstrap_unavailable_or_mismatched$"):
+            client.persist(observed, state)
+        self.assertEqual([c[1] for c in self.calls], ["GET", "GET", "PUT"])
+        self.assertEqual(self.state(), state)
+
+    def test_wrapped_body_read_alarm_stops_before_readback_and_restores_process_state(self):
+        client = self.client()
+        observed = client.read()
+        state = enroll(self.initial, STACK_ID, "synthetic-ns", ATTEMPT, NOW)
+        replies = []
+        previous_handler = signal.getsignal(signal.SIGALRM)
+
+        def delayed_body(request, **kwargs):
+            result = self.send(request, **kwargs)
+            if request.method == "PUT":
+                replies.append(result)
+                result.raw.read = lambda *args, **kwargs: sleep(2)
+            return result
+
+        self.transport.side_effect = delayed_body
+        self.calls.clear()
+        key = "OCI_HEADER_PARSING_ERROR_MAX_RETRIES"
+        with patch.dict(os.environ, {key: "7"}), patch(
+                "troubleshooter_deployment.oci_transport.operation_budget", partial(operation_budget, seconds=1)):
+            with self.assertRaisesRegex(BootstrapStoreError, "^bucket_bootstrap_unavailable_or_mismatched$"):
+                client.persist(observed, state)
+            self.assertEqual(os.environ[key], "7")
+        self.assertEqual(signal.getsignal(signal.SIGALRM), previous_handler)
+        self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+        self.assertEqual([c[1] for c in self.calls], ["GET", "GET", "PUT"])
+        self.assertEqual(len(replies), 1)
+        self.assertTrue(replies[0].raw.closed)
+
+    def test_late_success_without_alarm_does_not_start_readback(self):
+        client = self.client()
+        observed = client.read()
+        state = enroll(self.initial, STACK_ID, "synthetic-ns", ATTEMPT, NOW)
+        with patch("troubleshooter_deployment.request_budget.monotonic") as clock:
+            clock.return_value = 100
+
+            def late_reply(request, **kwargs):
+                result = self.send(request, **kwargs)
+                if request.method == "PUT":
+                    clock.return_value = 121
+                return result
+
+            self.transport.side_effect = late_reply
+            self.calls.clear()
+            with self.assertRaises(BootstrapStoreError):
+                client.persist(observed, state)
+        self.assertEqual([c[1] for c in self.calls], ["GET", "GET", "PUT"])
