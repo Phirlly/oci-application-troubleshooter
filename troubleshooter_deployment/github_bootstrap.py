@@ -14,8 +14,10 @@ from urllib.parse import parse_qs, urlsplit
 from .bootstrap_commitment import StackBootstrapCommitment, commitment_payload, parse_commitment, scope_digest
 from .codec import MAX_BYTES
 from .request_budget import operation_budget
+from .stack_ownership import StackOwnershipCommitment, ownership_payload, parse_ownership
 
 BOOTSTRAP_TASK = "oci-troubleshooter-bootstrap-v1"
+OWNERSHIP_TASK = "oci-troubleshooter-stack-ownership-v1"
 
 
 class BootstrapError(RuntimeError):
@@ -32,7 +34,7 @@ class BootstrapWriteUncertain(BootstrapError):
 class SavedCommitment:
     deployment_id: int
     created_at: str
-    commitment: StackBootstrapCommitment
+    commitment: StackBootstrapCommitment | StackOwnershipCommitment
 
 
 def _pairs(pairs):
@@ -85,12 +87,14 @@ class GitHubBootstrap:
         if type(data) is not dict or type(data.get("id")) is not int or data["id"] != repository_id:
             raise BootstrapError()
 
-    def _entry(self, data, repository_id):
-        commitment = parse_commitment(data["payload"])
-        if (commitment.repository_id != repository_id or type(data["id"]) is not int
-                or not 0 < data["id"] < 2**63 or data["task"] != BOOTSTRAP_TASK
-                or data["sha"] != commitment.attempt.source_sha or data["ref"] != data["sha"]
-                or data["environment"] != commitment.environment
+    def _entry(self, data, repository_id, ownership=False):
+        commitment = parse_ownership(data["payload"]) if ownership else parse_commitment(data["payload"])
+        original = commitment.bootstrap if ownership else commitment
+        task = OWNERSHIP_TASK if ownership else BOOTSTRAP_TASK
+        if (original.repository_id != repository_id or type(data["id"]) is not int
+                or not 0 < data["id"] < 2**63 or data["task"] != task
+                or data["sha"] != original.attempt.source_sha or data["ref"] != data["sha"]
+                or data["environment"] != original.environment
                 or data["repository_url"].casefold() != ("https://api.github.com" + self._repository).casefold()
                 or type(data["created_at"]) is not str
                 or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", data["created_at"]) is None):
@@ -103,21 +107,30 @@ class GitHubBootstrap:
 
         Even a confirmed result does not authorize OCI dispatch by itself.
         """
+        return self._publish(commitment, ownership=False)
+
+    def publish_ownership(self, commitment):
+        """Retain prior positive ACK evidence; caller must validate it first."""
+        return self._publish(commitment, ownership=True)
+
+    def _publish(self, commitment, *, ownership):
         dispatched = False
         try:
-            payload = commitment_payload(commitment)
+            payload = ownership_payload(commitment) if ownership else commitment_payload(commitment)
+            original = commitment.bootstrap if ownership else commitment
+            task = OWNERSHIP_TASK if ownership else BOOTSTRAP_TASK
             with operation_budget():
-                self._verify_repository(commitment.repository_id)
-                body = {"ref": commitment.attempt.source_sha, "task": BOOTSTRAP_TASK,
-                        "environment": commitment.environment, "auto_merge": False, "required_contexts": [],
+                self._verify_repository(original.repository_id)
+                body = {"ref": original.attempt.source_sha, "task": task,
+                        "environment": original.environment, "auto_merge": False, "required_contexts": [],
                         "transient_environment": False, "production_environment": False, "payload": payload}
                 dispatched = True
                 data, _ = self._request("POST", self._path, body, 201)
-                saved = self._entry(data, commitment.repository_id)
+                saved = self._entry(data, original.repository_id, ownership)
                 if saved.commitment != commitment:
                     raise BootstrapError()
                 readback, _ = self._request("GET", f"{self._path}/{saved.deployment_id}")
-                if self._entry(readback, commitment.repository_id) != saved:
+                if self._entry(readback, original.repository_id, ownership) != saved:
                     raise BootstrapError()
             return saved
         except Exception:
@@ -125,7 +138,7 @@ class GitHubBootstrap:
                 raise BootstrapWriteUncertain() from None
             raise BootstrapError() from None
 
-    def _next(self, link, repository_id, current):
+    def _next(self, link, repository_id, current, task):
         if link is None:
             return None
         if type(link) is not str or not 0 < len(link) <= 4096:
@@ -139,7 +152,7 @@ class GitHubBootstrap:
             query = parse_qs(url.query, strict_parsing=True, keep_blank_values=True, max_num_fields=3)
             if (url.scheme != "https" or url.netloc != "api.github.com" or url.fragment
                     or url.path.casefold() not in (self._path.casefold(), f"/repositories/{repository_id}/deployments")
-                    or set(query) != {"task", "per_page", "page"} or query["task"] != [BOOTSTRAP_TASK]
+                    or set(query) != {"task", "per_page", "page"} or query["task"] != [task]
                     or query["per_page"] != ["10"] or len(query["page"]) != 1
                     or re.fullmatch(r"[1-9][0-9]{0,9}", query["page"][0]) is None):
                 raise BootstrapError()
@@ -157,31 +170,40 @@ class GitHubBootstrap:
 
     def discover(self, scope):
         """Return bounded observed history. Empty history never grants creation."""
+        return self._discover(scope, ownership=False)
+
+    def discover_ownership(self, scope):
+        """Read retained positive-ACK bindings, never infer them from names."""
+        return self._discover(scope, ownership=True)
+
+    def _discover(self, scope, *, ownership):
         try:
             target = scope_digest(scope)
+            task = OWNERSHIP_TASK if ownership else BOOTSTRAP_TASK
             results, seen, runs = [], set(), {}
             with operation_budget():
                 self._verify_repository(scope.repository_id)
                 for page in range(1, 6):
                     data, link = self._request("GET", self._path +
-                        f"?task={BOOTSTRAP_TASK}&per_page=10&page={page}")
+                        f"?task={task}&per_page=10&page={page}")
                     if type(data) is not list or len(data) > 10:
                         raise BootstrapError()
                     for row in data:
-                        saved = self._entry(row, scope.repository_id)
+                        saved = self._entry(row, scope.repository_id, ownership)
                         if saved.deployment_id in seen:
                             raise BootstrapError()
                         seen.add(saved.deployment_id)
                         intent = saved.commitment
-                        key = (intent.environment, intent.attempt.run_id)
+                        original = intent.bootstrap if ownership else intent
+                        key = (original.environment, original.attempt.run_id)
                         if key in runs and runs[key] != intent:
                             raise BootstrapError()
                         runs[key] = intent
-                        if intent.environment == scope.environment:
-                            if intent.scope_sha256 != target:
+                        if original.environment == scope.environment:
+                            if original.scope_sha256 != target:
                                 raise BootstrapError()
                             results.append(saved)
-                    if self._next(link, scope.repository_id, page) is None:
+                    if self._next(link, scope.repository_id, page, task) is None:
                         break
                 else:
                     raise BootstrapError()

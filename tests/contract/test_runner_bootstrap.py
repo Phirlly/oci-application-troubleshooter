@@ -3,13 +3,17 @@ from io import BytesIO
 import json
 import unittest
 from unittest.mock import Mock, patch
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from troubleshooter_deployment.bootstrap_commitment import freeze_stack_request
+from troubleshooter_deployment.github_bootstrap import BOOTSTRAP_TASK, OWNERSHIP_TASK
+from troubleshooter_deployment.oci_owned_stack import OwnedStackObservation
 from troubleshooter_deployment.runner_bootstrap import BootstrapPending, bootstrap_initial_stack
 from troubleshooter_deployment.stack_bootstrap import build_initial_stack
+from troubleshooter_deployment.stack_ownership import freeze_stack_ownership
 from tests.contract.oci_responses import CONFIG, OCI_IDENTITY, SyntheticSigner, response
 from tests.contract.test_github_bootstrap import BASE, deployment
+from tests.contract.test_github_stack_ownership import owned_deployment
 from tests.contract.test_oci_stack_bootstrap import CREATED, NOW, STACK_ID, stack_data
 from tests.deployment.fixtures import ATTEMPT, NEXT_ATTEMPT
 
@@ -22,6 +26,8 @@ class RunnerBootstrapTests(unittest.TestCase):
         self.current_status, self.original_status = "in_progress", "completed"
         self.lose_publish, self.lose_create, self.conflict = False, False, False
         self.gh_denied, self.bad_get = False, False
+        self.lose_ownership, self.bad_ownership_get, self.existing_stack = False, False, False
+        self.evolved = False
         self.scope = OCI_IDENTITY.scope
         self.request = build_initial_stack(self.scope, ATTEMPT, CONFIG["user"])
         self.clock = patch("troubleshooter_deployment.stack_bootstrap.time", return_value=NOW).start()
@@ -50,17 +56,22 @@ class RunnerBootstrapTests(unittest.TestCase):
                 self.assertNotIn(CONFIG["user"], body.decode())
                 self.assertNotIn(CONFIG["tenancy"], body.decode())
                 self.assertNotIn(CONFIG["key_content"], body.decode())
-                data = {**public, "id": 11, "sha": public["ref"], "created_at": CREATED,
+                data = {**public, "id": max([10] + [item["id"] for item in self.history]) + 1,
+                        "sha": public["ref"], "created_at": CREATED,
                         "repository_url": "https://api.github.com/repos/synthetic-owner/synthetic-repo"}
                 self.history.append(data)
                 if self.lose_publish:
                     raise OSError("private-gh-token")
+                if self.lose_ownership and public["task"] == OWNERSHIP_TASK:
+                    raise OSError("private-ownership-reply")
                 status = 201
             elif "?task=" in path:
-                data = self.history
+                task = parse_qs(urlsplit(path).query)["task"][0]
+                data = [item for item in self.history if item["task"] == task]
             else:
-                self.assertEqual(path, BASE + "/11")
-                data = self.history[-1]
+                data = next(item for item in self.history if path == BASE + "/" + str(item["id"]))
+                if self.bad_ownership_get and data["task"] == OWNERSHIP_TASK:
+                    status = 403
             content = json.dumps(data).encode()
             result = Mock(status=403 if self.gh_denied else status)
             result.read.side_effect = BytesIO(content).read
@@ -75,14 +86,19 @@ class RunnerBootstrapTests(unittest.TestCase):
         if request.method == "POST":
             self.assertEqual(path, "/20180917/stacks")
             self.creates.append((request.body, request.headers["opc-retry-token"]))
+            self.existing_stack = True
             if self.lose_create:
                 raise OSError("private-create-reply")
             return response(stack_data(self.request))
         self.assertEqual(request.method, "GET")
         if path == "/20180917/stacks":
-            return response([stack_data(self.request)] if self.conflict else [])
+            return response([stack_data(self.request)] if self.conflict or self.existing_stack else [])
         if path == "/20180917/stacks/" + STACK_ID:
-            return response(stack_data(self.request), status=403 if self.bad_get else 200)
+            data = stack_data(self.request)
+            if self.evolved:
+                data["variables"]["next_step"] = "saved"
+                data["configSource"]["workingDirectory"] = "application"
+            return response(data, status=403 if self.bad_get else 200)
         self.assertEqual(path, "/20180917/jobs")
         return response([])
 
@@ -107,8 +123,10 @@ class RunnerBootstrapTests(unittest.TestCase):
         self.assertEqual(result.stack_id, STACK_ID)
         self.assertEqual(self.creates, [(self.request.body, self.request.token)])
         methods = [(service, method) for service, method, _ in self.events]
-        self.assertEqual(methods, [("github", "GET")] * 3 + [("oci", "GET"), ("github", "GET"),
-            ("github", "POST"), ("github", "GET"), ("oci", "POST"), ("oci", "GET"), ("oci", "GET")])
+        self.assertEqual(methods, [("github", "GET")] * 5 + [("oci", "GET"), ("github", "GET"),
+            ("github", "POST"), ("github", "GET"), ("oci", "POST"), ("oci", "GET"), ("oci", "GET"),
+            ("github", "GET"), ("github", "POST"), ("github", "GET")])
+        self.assertEqual([item["task"] for item in self.history], [BOOTSTRAP_TASK, OWNERSHIP_TASK])
 
     def test_existing_same_attempt_never_redispatches(self):
         self.history = [self.saved()]
@@ -121,7 +139,7 @@ class RunnerBootstrapTests(unittest.TestCase):
         result = self.run_controller(NEXT_ATTEMPT)
         self.assertEqual(result.stack_id, STACK_ID)
         self.assertEqual(self.creates, [(self.request.body, self.request.token)])
-        self.assertFalse(any(service == "github" and method == "POST" for service, method, _ in self.events))
+        self.assertEqual([item["task"] for item in self.history], [BOOTSTRAP_TASK, OWNERSHIP_TASK])
 
     def test_lost_github_reply_suppresses_oci_then_fresh_attempt_recovers(self):
         self.lose_publish = True
@@ -130,7 +148,7 @@ class RunnerBootstrapTests(unittest.TestCase):
         self.lose_publish = False
         self.assertEqual(self.run_controller(NEXT_ATTEMPT).stack_id, STACK_ID)
         self.assertEqual(self.creates, [(self.request.body, self.request.token)])
-        self.assertEqual(len(self.history), 1)
+        self.assertEqual(len(self.history), 2)
 
     def test_lost_oci_reply_reuses_original_bytes_token_after_key_rotation(self):
         self.lose_create = True
@@ -139,7 +157,7 @@ class RunnerBootstrapTests(unittest.TestCase):
         rotated = {**CONFIG, "fingerprint": ":".join(["11"] * 16), "key_content": "replacement-synthetic-key"}
         self.assertEqual(self.run_controller(NEXT_ATTEMPT, rotated).stack_id, STACK_ID)
         self.assertEqual(self.creates, [(self.request.body, self.request.token)] * 2)
-        self.assertEqual(len(self.history), 1)
+        self.assertEqual(len(self.history), 2)
 
     def test_denied_nonterminal_or_conflicting_history_has_no_mutation(self):
         self.history = [self.saved()]
@@ -169,6 +187,7 @@ class RunnerBootstrapTests(unittest.TestCase):
         self.history = [self.saved(identifier=12, created_at="2026-10-10T00:00:00Z"), self.saved()]
         self.assertEqual(self.run_controller(NEXT_ATTEMPT).stack_id, STACK_ID)
         self.creates.clear()
+        self.history = [item for item in self.history if item["task"] == BOOTSTRAP_TASK]
         self.history[0]["created_at"] = "2026-10-09T02:00:00Z"
         self.assert_pending(self.run_controller(NEXT_ATTEMPT), "initial_retry_window_closed")
         self.assertEqual(self.creates, [])
@@ -180,7 +199,62 @@ class RunnerBootstrapTests(unittest.TestCase):
         self.history = [self.saved()]
         self.assertEqual(self.run_controller(replace(ATTEMPT, run_id=101)).stack_id, STACK_ID)
         self.assertEqual(self.creates, [(self.request.body, self.request.token)])
-        self.assertEqual(len(self.history), 1)
+        self.assertEqual(len(self.history), 2)
+
+    def test_confirmed_ownership_resumes_same_or_fresh_attempt_after_expiry_and_evolution(self):
+        self.assertEqual(self.run_controller().stack_id, STACK_ID)
+        self.evolved = True
+        self.clock.return_value = NOW + 48 * 3600
+        for attempt in [ATTEMPT, NEXT_ATTEMPT, replace(ATTEMPT, run_id=101)]:
+            self.events.clear()
+            found = self.run_controller(attempt)
+            self.assertIsInstance(found, OwnedStackObservation)
+            self.assertEqual(found.stack_id, STACK_ID)
+            self.assertTrue(all(method == "GET" for _, method, _ in self.events))
+            self.assertFalse(any("/jobs" in path for _, _, path in self.events))
+        self.assertEqual(len(self.history), 2)
+        self.assertEqual(len(self.creates), 1)
+
+    def test_lost_ownership_publish_or_readback_recovers_without_repeating_create(self):
+        for failure in ["lose_ownership", "bad_ownership_get"]:
+            with self.subTest(failure=failure):
+                self.history, self.creates, self.events = [], [], []
+                self.existing_stack = False
+                setattr(self, failure, True)
+                self.assert_pending(self.run_controller(), "stack_ownership_checkpoint_unconfirmed")
+                self.assertEqual(len(self.creates), 1)
+                self.assertEqual(len(self.history), 2)
+                setattr(self, failure, False)
+                self.events.clear()
+                self.assertEqual(self.run_controller(NEXT_ATTEMPT).stack_id, STACK_ID)
+                self.assertTrue(all(method == "GET" for _, method, _ in self.events))
+                self.assertEqual(len(self.creates), 1)
+
+    def test_ownership_without_bootstrap_or_failed_readback_never_falls_back_to_create(self):
+        commitment = freeze_stack_request(self.scope, ATTEMPT, self.request.body)
+        owned = owned_deployment(freeze_stack_ownership(commitment, STACK_ID))
+        for history, exists, denied in [([owned], True, False), ([self.saved(), owned], False, False),
+                                       ([self.saved(), owned], True, True)]:
+            self.history, self.existing_stack, self.bad_get = history, exists, denied
+            self.assert_pending(self.run_controller(NEXT_ATTEMPT))
+        self.assertEqual(self.creates, [])
+        self.assertTrue(all(method == "GET" for _, method, _ in self.events))
+
+    def test_duplicate_ownership_is_read_only_but_conflicting_or_foreign_intent_blocks(self):
+        self.assertEqual(self.run_controller().stack_id, STACK_ID)
+        owned = self.history[-1]
+        self.history.append({**owned, "id": 13})
+        self.events.clear()
+        self.assertEqual(self.run_controller(NEXT_ATTEMPT).stack_id, STACK_ID)
+        self.assertTrue(all(method == "GET" for _, method, _ in self.events))
+        self.history[-1] = {**owned, "id": 13, "payload": {**owned["payload"], "stack_sha256": "f" * 64}}
+        self.assert_pending(self.run_controller(NEXT_ATTEMPT))
+        foreign = replace(ATTEMPT, run_id=99)
+        request = build_initial_stack(self.scope, foreign, CONFIG["user"])
+        other = freeze_stack_ownership(freeze_stack_request(self.scope, foreign, request.body), STACK_ID)
+        self.history = [self.saved(), owned_deployment(other)]
+        self.assert_pending(self.run_controller(NEXT_ATTEMPT), "stack_ownership_mismatch")
+        self.assertEqual(len(self.creates), 1)
 
     def test_future_expired_or_expiring_during_dispatch_never_creates(self):
         for created_at in ["2026-10-10T01:00:01Z", "2026-10-09T02:00:00Z"]:
