@@ -28,6 +28,7 @@ class RecoveryStoreService(unittest.TestCase):
         self.anchor = InitialStackAcknowledgement(self.initial, STACK_ID, '"old-anchor"')
         self.calls, self.bucket, self.body, self.object_version = [], None, None, 0
         self.current, self.statuses, self.jobs, self.job_headers = ATTEMPT, {}, [], {}
+        self.attempt_shas = {(ATTEMPT.run_id, ATTEMPT.number): ATTEMPT.source_sha}
         self.fault, self.audit_count = None, 1
         self.now = NOW
         for module in ("resource_manager.resource_manager_client", "object_storage.object_storage_client",
@@ -45,6 +46,7 @@ class RecoveryStoreService(unittest.TestCase):
 
     def run_bootstrap(self, current=ATTEMPT):
         self.current = current
+        self.attempt_shas[(current.run_id, current.number)] = current.source_sha
         return bootstrap_recovery_store(scope=self.initial.scope, current=current,
             owner="synthetic-owner", repository="synthetic-repo", github_token="synthetic-token", oci_config=CONFIG)
 
@@ -61,7 +63,7 @@ class RecoveryStoreService(unittest.TestCase):
         status = self.statuses.get((run_id, number),
             "in_progress" if (run_id, number) == (self.current.run_id, self.current.number) else "completed")
         data = {"repository": {"id": self.initial.scope.repository_id}, "id": run_id, "run_attempt": number,
-                "head_sha": self.current.source_sha, "status": status}
+                "head_sha": self.attempt_shas[(run_id, number)], "status": status}
         body = json.dumps(data).encode()
         result = Mock(status=200)
         result.read.side_effect = BytesIO(body).read

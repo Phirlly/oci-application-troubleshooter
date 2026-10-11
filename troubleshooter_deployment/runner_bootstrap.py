@@ -52,9 +52,7 @@ def bootstrap_initial_stack(*, scope, current, owner, repository, github_token, 
                 return BootstrapPending("competing_bootstrap_commitments")
             reason = "initial_request_mismatch"
             request = build_initial_stack(scope, original.attempt, oci_config["user"])
-            if (freeze_stack_request(scope, original.attempt, request.body) != original
-                    or (current.source_sha, current.workflow_sha) !=
-                    (original.attempt.source_sha, original.attempt.workflow_sha)):
+            if freeze_stack_request(scope, original.attempt, request.body) != original:
                 return BootstrapPending(reason)
             if ownership_history:
                 ownership = ownership_history[0].commitment
@@ -67,6 +65,11 @@ def bootstrap_initial_stack(*, scope, current, owner, repository, github_token, 
                     cleanup.callback(stack.close)
                     result = stack.read()
                 return result
+            # Observing confirmed ownership is read-only. Creation/replay must
+            # still execute the exact release that committed the request.
+            if ((current.source_sha, current.workflow_sha) !=
+                    (original.attempt.source_sha, original.attempt.workflow_sha)):
+                return BootstrapPending("initial_request_mismatch")
             if (current.run_id, current.number) == (original.attempt.run_id, original.attempt.number):
                 return BootstrapPending("original_attempt_not_completed")
             reason = "github_evidence_unavailable"

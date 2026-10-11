@@ -49,6 +49,7 @@ class CompleteStackBootstrapTests(initial_tests.BootstrapHttpService):
 
     def run_journal(self, current=ATTEMPT):
         self.current = current
+        self.attempt_shas[(current.run_id, current.number)] = current.source_sha
         return bootstrap_stack_journal(scope=self.scope, current=current, owner="synthetic-owner",
             repository="synthetic-repo", github_token="synthetic-token", oci_config=CONFIG)
 
@@ -116,7 +117,7 @@ class CompleteStackBootstrapTests(initial_tests.BootstrapHttpService):
         self.assertEqual(len(self.puts), previous)
         self.assertEqual(len(self.creates), 1)
 
-    def test_denial_conflict_unfinished_attempt_or_release_change_never_replaces_stack(self):
+    def test_denial_conflict_or_unfinished_attempt_never_replaces_stack(self):
         self.assertIsInstance(self.run_journal(), StackJournalReady)
         self.gh_denied = True
         self.assertIsInstance(self.run_journal(NEXT_ATTEMPT), BootstrapPending)
@@ -124,11 +125,44 @@ class CompleteStackBootstrapTests(initial_tests.BootstrapHttpService):
         self.original_status = "in_progress"
         self.assertIsInstance(self.run_journal(NEXT_ATTEMPT), BootstrapPending)
         self.original_status = "completed"
-        self.assertIsInstance(self.run_journal(replace(NEXT_ATTEMPT, source_sha="b" * 40)), BootstrapPending)
         self.fault = "conflict"
         self.assertIsInstance(self.run_journal(NEXT_ATTEMPT), BootstrapPending)
         self.assertEqual(len(self.creates), 1)
         self.assertEqual(decode(read_journal(self.stack["variables"])).owner, ATTEMPT)
+
+    def test_new_release_reuses_empty_journal_without_create_or_github_publication(self):
+        original = self.run_journal()
+        before = json.loads(json.dumps(self.stack))
+        later = replace(ATTEMPT, run_id=200, source_sha="b" * 40, workflow_sha="b" * 40)
+        self.events.clear()
+        result = self.run_journal(later)
+        self.assertIsInstance(result, StackJournalReady)
+        self.assertEqual(result.snapshot.record, replace(original.snapshot.record, owner=later))
+        self.assertEqual(result.anchor.request, original.anchor.request)
+        self.assertEqual(len(self.creates), 1)
+        self.assertEqual(len(self.history), 2)
+        self.assertEqual(len(self.puts), 2)
+        self.assertEqual(set(json.loads(self.puts[-1].body)), {"variables"})
+        self.assertTrue(all(method == "GET" for service, method, _ in self.events if service == "github"))
+        self.assertEqual({k: v for k, v in self.stack.items() if k != "variables"},
+                         {k: v for k, v in before.items() if k != "variables"})
+
+    def test_changed_release_cannot_finish_unconfirmed_creation_or_missing_journal(self):
+        later = replace(ATTEMPT, run_id=200, source_sha="b" * 40, workflow_sha="b" * 40)
+        self.lose_create = True
+        self.assertIsInstance(self.run_journal(), BootstrapPending)
+        self.lose_create = False
+        self.assertIsInstance(self.run_journal(later), BootstrapPending)
+        self.assertEqual(len(self.creates), 1)
+        self.assertEqual(self.puts, [])
+        # Same-release reconciliation confirms ownership, but initialization loses its request.
+        self.fault = "before"
+        self.assertIsInstance(self.run_journal(NEXT_ATTEMPT), BootstrapPending)
+        self.fault = None
+        count = len(self.puts)
+        self.assertIsInstance(self.run_journal(later), BootstrapPending)
+        self.assertEqual(len(self.puts), count)
+        self.assertIsNone(read_journal(self.stack["variables"]))
 
     def test_unconfirmed_expired_create_stays_pending_without_new_token(self):
         self.lose_create = True

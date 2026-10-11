@@ -24,6 +24,7 @@ class BootstrapHttpService(unittest.TestCase):
     def setUp(self):
         self.history, self.events, self.creates = [], [], []
         self.current_status, self.original_status = "in_progress", "completed"
+        self.attempt_shas = {(ATTEMPT.run_id, ATTEMPT.number): ATTEMPT.source_sha}
         self.lose_publish, self.lose_create, self.conflict = False, False, False
         self.gh_denied, self.bad_get = False, False
         self.lose_ownership, self.bad_ownership_get, self.existing_stack = False, False, False
@@ -47,7 +48,7 @@ class BootstrapHttpService(unittest.TestCase):
                 run_id, number = int(parts[-3]), int(parts[-1].split("?")[0])
                 active = (run_id, number) == (self.current.run_id, self.current.number)
                 data = {"repository": {"id": 42}, "id": run_id, "run_attempt": number,
-                        "head_sha": ATTEMPT.source_sha,
+                        "head_sha": self.attempt_shas[(run_id, number)],
                         "status": self.current_status if active else self.original_status}
             elif path == BASE.rsplit("/", 1)[0]:
                 data = {"id": 42}
@@ -104,6 +105,7 @@ class BootstrapHttpService(unittest.TestCase):
 
     def run_controller(self, current=ATTEMPT, config=CONFIG, scope=None):
         self.current = current
+        self.attempt_shas[(current.run_id, current.number)] = current.source_sha
         return bootstrap_initial_stack(scope=self.scope if scope is None else scope, current=current,
             owner="synthetic-owner", repository="synthetic-repo", github_token="synthetic-token", oci_config=config)
 
@@ -120,6 +122,17 @@ class BootstrapHttpService(unittest.TestCase):
 
 
 class RunnerBootstrapTests(BootstrapHttpService):
+    def test_confirmed_cross_release_discovery_is_read_only_and_preserves_provenance(self):
+        self.run_controller()
+        self.events.clear()
+        later = replace(ATTEMPT, run_id=200, source_sha="b" * 40, workflow_sha="b" * 40)
+        found = self.run_controller(later)
+        self.assertIsInstance(found, OwnedStackObservation)
+        self.assertEqual(found.request, self.request)
+        self.assertTrue(all(method == "GET" for _, method, _ in self.events))
+        self.assertEqual(len(self.creates), 1)
+        self.assertEqual(len(self.history), 2)
+
     def test_new_enrollment_publishes_and_reads_before_one_exact_create(self):
         result = self.run_controller()
         self.assertEqual(result.stack_id, STACK_ID)

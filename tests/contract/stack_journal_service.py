@@ -17,6 +17,7 @@ class StackJournalService(RecoveryStoreService):
 
     def run_bootstrap(self, current=ATTEMPT):
         self.current = current
+        self.attempt_shas[(current.run_id, current.number)] = current.source_sha
         return bootstrap_stack_journal(scope=self.initial.scope, current=current,
             owner="synthetic-owner", repository="synthetic-repo", github_token="synthetic-token", oci_config=CONFIG)
 

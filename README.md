@@ -5,7 +5,7 @@ propose a repair, and verify recovery after your approval.
 
 **Status: in development.** Deployment recovery and OCI/GitHub integrations have
 offline tests. A development GitHub workflow initializes or resumes the recovery
-journal; hosted execution is unverified. Workload resources, Deploy, Verify and
+journal; hosted startup is verified, but OCI bootstrap is not. Workload resources, Deploy, Verify and
 Destroy are not implemented. The demo is not runnable yet.
 
 ## Configure once
@@ -26,12 +26,13 @@ to the reviewed `main` branch; remove same-name repository/organization secret
 fallbacks. Never commit actual configuration or put credentials in tfvars.
 Region availability and permissions require preflight.
 
-The development bootstrap workflow is for isolated testing only. It retains an
-empty Resource Manager stack and reports `BOOTSTRAP_VERIFIED`, not demo readiness.
-Retain its GitHub deployment history and rerun the same commit for recovery.
-Changing the release or an expired, unconfirmed creation can leave recovery
-pending. Automated removal is not available yet; arrange fixture cleanup before
-testing. OpenAI and presenter secrets are not consumed by this bootstrap proof.
+The development bootstrap workflow retains a Resource Manager stack for recovery
+metadata and reports `BOOTSTRAP_VERIFIED`, not demo readiness. It creates no
+workload. Retain its GitHub deployment history. Later reviewed releases can reuse
+an empty journal after the previous run finishes; populated journals require the
+same release. Missing journals or unconfirmed creation require the original
+release, and expired, unconfirmed creation remains pending. This workflow does
+not remove the retained stack or use OpenAI/presenter secrets.
 
 After setup, the intended experience uses only GitHub Actions and
 the demo page—no local Terraform, Cloud Shell, SSH or manual service wiring.

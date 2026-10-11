@@ -13,6 +13,54 @@ from tests.deployment.fixtures import ATTEMPT, NEXT_ATTEMPT, GENERATION, SHA, OP
 
 
 class RunnerStackJournalTests(StackJournalService):
+    def test_empty_journal_handover_then_same_release_resumes_evolved_history(self):
+        original = self.run_bootstrap()
+        later = replace(ATTEMPT, run_id=200, source_sha="b" * 40, workflow_sha="b" * 40)
+        result = self.run_bootstrap(later)
+        self.assertIsInstance(result, StackJournalReady)
+        self.assertEqual(result.snapshot.record, replace(original.snapshot.record, owner=later))
+        record = begin_generation(result.snapshot.record, GENERATION, SHA)
+        evolved, _ = reserve(record, GENERATION, OPERATION, "provision")
+        self.stack["variables"] = merge_journal(self.stack["variables"], encode(evolved))
+        self.stack_version += 1
+        retry = replace(later, number=2)
+        resumed = self.run_bootstrap(retry)
+        self.assertIsInstance(resumed, StackJournalReady)
+        self.assertEqual(resumed.snapshot.record, replace(evolved, owner=retry))
+
+    def test_changed_source_or_workflow_cannot_take_populated_or_closed_journal(self):
+        original = self.run_bootstrap().snapshot.record
+        populated = begin_generation(original, GENERATION, SHA)
+        uncertain, _ = reserve(populated, GENERATION, OPERATION, "provision")
+        for record in (populated, uncertain, prepare_purge(original, REMOVAL)):
+            for field in ("source_sha", "workflow_sha"):
+                with self.subTest(record=record, field=field):
+                    self.stack["variables"] = merge_journal(self.stack["variables"], encode(record))
+                    self.calls.clear()
+                    later = replace(ATTEMPT, run_id=200, **{field: "b" * 40})
+                    self.assertIsInstance(self.run_bootstrap(later), BootstrapPending)
+                    self.assertEqual(self.mutations(), [])
+                    self.assertEqual(decode(read_journal(self.stack["variables"])), record)
+
+    def test_cross_release_takeover_requires_completed_owner_and_cas(self):
+        original = self.run_bootstrap().snapshot.record
+        later = replace(ATTEMPT, run_id=200, source_sha="b" * 40, workflow_sha="b" * 40)
+        self.statuses[(ATTEMPT.run_id, ATTEMPT.number)] = "in_progress"
+        self.calls.clear()
+        self.assertIsInstance(self.run_bootstrap(later), BootstrapPending)
+        self.assertEqual(self.mutations(), [])
+        self.statuses.clear()
+        self.fault = "conflict"
+        self.assertIsInstance(self.run_bootstrap(later), BootstrapPending)
+        self.assertEqual(decode(read_journal(self.stack["variables"])), original)
+        self.fault = "after"
+        self.assertIsInstance(self.run_bootstrap(later), BootstrapPending)
+        self.assertEqual(decode(read_journal(self.stack["variables"])), replace(original, owner=later))
+        self.fault = None
+        self.calls.clear()
+        self.assertIsInstance(self.run_bootstrap(later), StackJournalReady)
+        self.assertEqual(self.mutations(), [])
+
     def test_one_invocation_is_ready_without_bucket_or_manual_second_run(self):
         result = self.run_bootstrap()
         self.assertIsInstance(result, StackJournalReady)
