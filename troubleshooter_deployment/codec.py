@@ -70,6 +70,13 @@ def validate_scope(scope):
         raise RecordError() from None
 
 
+def validate_attempt(attempt):
+    try:
+        _require(type(attempt) is Attempt and _attempt(asdict(attempt)) == attempt)
+    except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
+        raise RecordError() from None
+
+
 def _identity(value):
     data = _fields(value, Identity)
     return Identity(_scope(data["scope"]),
