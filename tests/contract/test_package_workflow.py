@@ -17,7 +17,7 @@ class PackageWorkflowTests(unittest.TestCase):
             'push': {'branches': ['dev', 'main']},
             'pull_request': {'branches': ['dev', 'main']}})
         self.assertEqual(self.workflow['permissions'], {'contents': 'read'})
-        self.assertEqual(set(self.workflow['jobs']), {'package'})
+        self.assertEqual(set(self.workflow['jobs']), {'package', 'terraform'})
         self.assertEqual(self.job['runs-on'], 'ubuntu-24.04')
         self.assertLessEqual(self.job['timeout-minutes'], 20)
         self.assertNotIn('permissions', self.job)
@@ -31,6 +31,28 @@ class PackageWorkflowTests(unittest.TestCase):
             if 'run' in step:
                 self.assertNotIn('${{', step['run'])
                 self.assertLessEqual(step['timeout-minutes'], 8)
+
+    def test_terraform_job_is_bounded_and_has_no_deployment_authority(self):
+        job = self.workflow['jobs']['terraform']
+        self.assertEqual(job['runs-on'], 'ubuntu-24.04')
+        self.assertLessEqual(job['timeout-minutes'], 15)
+        self.assertNotIn('permissions', job)
+        steps = job['steps']
+        self.assertEqual([step['uses'] for step in steps if 'uses' in step], [
+            'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+            'astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9'])
+        self.assertEqual(steps[0]['with'], {'ref': '${{ github.sha }}', 'persist-credentials': False})
+        self.assertEqual(steps[1]['with'], {'version': '0.13.0', 'python-version': '3.12.15', 'enable-cache': False})
+        commands = [step['run'] for step in steps if 'run' in step]
+        self.assertEqual(commands, [
+            'uv sync --locked --no-build --no-dev --python 3.12.15',
+            '.venv/bin/python tests/integration/check_workload_terraform.py --pull-image',
+            'git diff --exit-code -- terraform pyproject.toml uv.lock'])
+        for step in steps:
+            self.assertNotIn('if', step)
+            if 'run' in step:
+                self.assertNotIn('${{', step['run'])
+                self.assertLessEqual(step['timeout-minutes'], 12)
 
     def test_exact_tools_without_credential_or_cache_persistence(self):
         steps = self.job['steps']

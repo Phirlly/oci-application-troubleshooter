@@ -1,4 +1,4 @@
-# Deployer target inputs only. The workload resources are not implemented yet.
+# Deployer target inputs only. Automation supplies the internal generation inputs.
 # Credentials must never be supplied as Terraform variables.
 variable "region" {
   description = "OCI deployment region identifier. Access is checked by deployment preflight."

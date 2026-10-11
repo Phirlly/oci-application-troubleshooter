@@ -5,8 +5,9 @@ propose a repair, and verify recovery after your approval.
 
 **Status: in development.** GitHub bootstrap, fresh-runner reuse and recovery
 after a cancelled journal step are live-tested. The packaged login page passes
-browser and container checks. Workload resources, Deploy, Verify and Destroy
-are not implemented. The demo is not runnable yet.
+browser and container checks. Terraform resource definitions pass offline
+validation. Automatic host startup, Deploy, Verify and Destroy remain unfinished.
+The demo is not runnable yet.
 
 ## Configure once
 

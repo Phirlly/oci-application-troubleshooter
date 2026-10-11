@@ -22,6 +22,48 @@
     "cancel-in-progress": true
   },
   "jobs": {
+    "terraform": {
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 15,
+      "env": {
+        "UV_HTTP_TIMEOUT": "30",
+        "UV_HTTP_RETRIES": "1"
+      },
+      "steps": [
+        {
+          "name": "Checkout exact source",
+          "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "with": {
+            "ref": "${{ github.sha }}",
+            "persist-credentials": false
+          }
+        },
+        {
+          "name": "Set up locked Python tooling",
+          "uses": "astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9",
+          "with": {
+            "version": "0.13.0",
+            "python-version": "3.12.15",
+            "enable-cache": false
+          }
+        },
+        {
+          "name": "Install locked runtime wheels",
+          "timeout-minutes": 5,
+          "run": "uv sync --locked --no-build --no-dev --python 3.12.15"
+        },
+        {
+          "name": "Check packaged Terraform with OCI networking disabled",
+          "timeout-minutes": 12,
+          "run": ".venv/bin/python tests/integration/check_workload_terraform.py --pull-image"
+        },
+        {
+          "name": "Verify locked inputs are unchanged",
+          "timeout-minutes": 1,
+          "run": "git diff --exit-code -- terraform pyproject.toml uv.lock"
+        }
+      ]
+    },
     "package": {
       "runs-on": "ubuntu-24.04",
       "timeout-minutes": 20,
