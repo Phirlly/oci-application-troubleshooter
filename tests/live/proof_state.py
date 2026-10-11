@@ -158,10 +158,11 @@ def ensure_directory(path):
 
 
 class ProofStore:
-    def __init__(self, path, inherited_fd=None):
+    def __init__(self, path, inherited_fd=None, *, validator=validate_state):
         self.path = Path(path)
         self.fd = self.lock_fd = None
         self.inherited_fd = inherited_fd
+        self.validator = validator
 
     def __enter__(self):
         try:
@@ -205,7 +206,7 @@ class ProofStore:
             if len(body) > MAX_STATE:
                 raise ProofStateError()
             state = json.loads(body, object_pairs_hook=_pairs)
-            validate_state(state)
+            self.validator(state)
             return state
         except Exception:
             raise ProofStateError() from None
@@ -213,7 +214,7 @@ class ProofStore:
     def write(self, state):
         temporary = None
         try:
-            validate_state(state)
+            self.validator(state)
             body = json.dumps(state, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("ascii")
             if len(body) > MAX_STATE:
                 raise ProofStateError()
