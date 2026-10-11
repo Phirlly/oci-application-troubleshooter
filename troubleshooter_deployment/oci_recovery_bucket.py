@@ -1,11 +1,11 @@
 """Single-dispatch creation and receipt-gated EMPTY bucket deletion.
 
 The caller durably freezes intent before dispatch and retains uncertainty.
-No adoption, implicit retry, object deletion or lost-response reconciliation.
+No implicit retry, object deletion or ownership inferred from a name alone.
 """
 from hashlib import sha256
 
-from oci.object_storage.models import Bucket, CreateBucketDetails
+from oci.object_storage.models import Bucket
 from oci.retry import NoneRetryStrategy
 
 from .cleanup import may_purge
@@ -16,7 +16,7 @@ from .oci_transport import oci_operation, strong_etag
 from .records import DeleteAcknowledgement, Identity
 from .recovery_bucket import (
     BucketAcknowledgement, BucketObservation, metadata, require_text,
-    validate_acknowledgement, validate_request,
+    creation_body_v1, validate_creation_evidence, validate_acknowledgement, validate_request,
 )
 
 
@@ -85,14 +85,10 @@ class OciRecoveryBucket:
         dispatched = False
         try:
             self._intent(request)
-            details = CreateBucketDetails(
-                name=request.name, compartment_id=request.scope.compartment_id, metadata=metadata(request),
-                public_access_type="NoPublicAccess", storage_tier="Standard", object_events_enabled=False,
-                versioning="Disabled", auto_tiering="Disabled", bucket_scope="NAMESPACE",
-            )
+            body = creation_body_v1(request)
             with oci_operation():
                 dispatched = True
-                result = self._client.create_bucket(request.namespace, details,
+                result = self._client.create_bucket(request.namespace, body,
                                                    opc_client_request_id=request.correlation,
                                                    retry_strategy=NoneRetryStrategy())
                 identity, _ = self._observed(result, request)
@@ -100,6 +96,29 @@ class OciRecoveryBucket:
         except Exception:
             if dispatched:
                 raise BucketUncertain() from None
+            raise BucketError() from None
+
+    def reconcile_creation(self, evidence):
+        """Read only: exact positive Audit evidence followed by two strict GETs.
+
+        Caller must retain intent, fence the original dispatcher, exclusively
+        control the namespace/name and never delete/reuse it before recovery.
+        No out-of-band replacement is supported. Persist/read back the returned
+        identity before journal initialization; this grants no cleanup authority.
+        """
+        try:
+            validate_creation_evidence(evidence)
+            request = evidence.request
+            self._intent(request)
+            with oci_operation():
+                first = self._client.get_bucket(request.namespace, request.name, fields=["autoTiering"],
+                                                retry_strategy=NoneRetryStrategy())
+                identity, observed = self._observed(first, request)
+                ack = BucketAcknowledgement(request, identity)
+                if self._read(ack).revision != observed.revision:
+                    raise BucketError()
+            return ack
+        except Exception:
             raise BucketError() from None
 
     def _read(self, ack):

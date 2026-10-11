@@ -1,4 +1,4 @@
-"""Bounded Audit observations and exact frozen-delete success reconciliation."""
+"""Bounded Audit observations and exact request-success reconciliation."""
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -9,7 +9,9 @@ from oci.retry import NoneRetryStrategy
 from .bucket_deletion import encode_intent
 from .oci_client import bounded_client
 from .oci_transport import TRANSPORT_REASONS, TransportError, oci_operation
-from .recovery_bucket import require_text, validate_acknowledgement
+from .recovery_bucket import (
+    BucketCreationEvidence, creation_digest_v1, require_text, validate_acknowledgement, validate_request,
+)
 from .records import DeleteAcknowledgement
 from .request_budget import BudgetError
 
@@ -45,10 +47,9 @@ class AuditScan:
     complete: bool = field(default=False, init=False)
 
 
-def _candidate(event, ack, operation, correlation, if_match=None):
+def _candidate(event, request, operation, correlation, if_match=None, content_sha256=None):
     """A missing or changed service field yields no candidate, never a guess."""
     try:
-        request = ack.request
         data = event["data"]
         identity, api_request, response = data["identity"], data["request"], data["response"]
         method, path, status = ("POST", f"/n/{request.namespace}/b", "200") if operation == "CreateBucket" else (
@@ -75,6 +76,10 @@ def _candidate(event, ack, operation, correlation, if_match=None):
             revisions = [value for key, value in headers.items() if key.lower() == "if-match"]
             if revisions != [[if_match]]:
                 return None
+        if content_sha256 is not None:
+            digests = [value for key, value in headers.items() if key.lower() == "x-content-sha256"]
+            if digests != [[content_sha256]]:
+                return None
         event_id = require_text(event["id"], r"[!-~]{1,256}")
         event_time = require_text(event["time"], r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z")
         datetime.fromisoformat(event_time)
@@ -88,7 +93,7 @@ class OciBucketAudit:
     def __init__(self, config, scope):
         try:
             self._client = bounded_client(config, scope, "loggingsearch")
-            self._scope = scope
+            self._scope, self._principal = scope, config["user"]
         except Exception:
             raise AuditError() from None
 
@@ -99,7 +104,28 @@ class OciBucketAudit:
             raise AuditError() from None
 
     def observe(self, ack, operation, correlation, start, end):
-        return self._observe(ack, operation, correlation, start, end)
+        try:
+            validate_acknowledgement(ack)
+        except Exception:
+            raise AuditError(scan_reason="query") from None
+        return self._observe(ack.request, operation, correlation, start, end)
+
+    def reconcile_creation(self, request, start, end):
+        """Confirm exact request success, not current identity or search coverage.
+
+        Caller supplies retained original intent/window under exclusive control
+        and fences its dispatcher. This never authorizes another CreateBucket.
+        """
+        try:
+            digest = creation_digest_v1(request)
+            if request.principal != self._principal:
+                raise ValueError()
+        except Exception:
+            raise AuditError(scan_reason="query") from None
+        scan = self._observe(request, "CreateBucket", request.correlation, start, end, content_sha256=digest)
+        if len(scan.matches) != 1:
+            return None
+        return BucketCreationEvidence(request, digest)
 
     def observe_deletion(self, intent, receipt, start, end):
         """Observe an exact frozen request; never infer a deletion acknowledgement."""
@@ -107,7 +133,7 @@ class OciBucketAudit:
             encode_intent(intent, receipt)
         except Exception:
             raise AuditError(scan_reason="query") from None
-        return self._observe(intent.ack, "DeleteBucket", intent.correlation, start, end, intent.if_match)
+        return self._observe(intent.ack.request, "DeleteBucket", intent.correlation, start, end, intent.if_match)
 
     def reconcile_deletion(self, intent, receipt, start, end):
         """Confirm one dispatched request, never ownership or search completeness.
@@ -120,12 +146,12 @@ class OciBucketAudit:
             return None
         return DeleteAcknowledgement(intent.ack.identity, receipt.removal_id)
 
-    def _observe(self, ack, operation, correlation, start, end, if_match=None):
+    def _observe(self, request, operation, correlation, start, end, if_match=None, content_sha256=None):
         phase = "query"
         try:
-            validate_acknowledgement(ack)
+            validate_request(request)
             require_text(correlation, r"[0-9a-f]{32}")
-            if (ack.request.scope != self._scope or type(operation) is not str
+            if (request.scope != self._scope or type(operation) is not str
                     or operation not in {"CreateBucket", "DeleteBucket"}):
                 raise AuditError(scan_reason=phase)
             for instant in (start, end):
@@ -159,7 +185,8 @@ class OciBucketAudit:
                                 or type(row["data"].get("datetime")) is not int
                                 or type(row["data"].get("logContent")) is not dict):
                             raise AuditError(scan_reason=phase)
-                        candidate = _candidate(row["data"]["logContent"], ack, operation, correlation, if_match)
+                        candidate = _candidate(row["data"]["logContent"], request, operation, correlation,
+                                               if_match, content_sha256)
                         if candidate is not None:
                             matches.append(candidate)
                     if "opc-next-page" not in result.headers:

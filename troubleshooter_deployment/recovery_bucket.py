@@ -1,5 +1,8 @@
-"""Frozen bucket intent and received creation evidence, never name-based adoption."""
+"""Frozen bucket requests and trusted direct or reconciled creation evidence."""
+from base64 import b64encode
 from dataclasses import dataclass
+from hashlib import sha256
+import json
 import re
 
 from .codec import validate_identity, validate_scope
@@ -18,7 +21,11 @@ class BucketRequest:
 
 @dataclass(frozen=True)
 class BucketAcknowledgement:
-    """Only a validated successful CREATE may establish this observation."""
+    """Validated direct CREATE or exact positive Audit plus independent GETs.
+
+    Reconciliation requires exclusive control and no name deletion/reuse.
+    Constructing this value does not establish ownership.
+    """
     request: BucketRequest
     identity: Identity
 
@@ -27,6 +34,13 @@ class BucketAcknowledgement:
 class BucketObservation:
     revision: str
     unknown_fields: tuple[str, ...]
+
+
+@dataclass(frozen=True, repr=False)
+class BucketCreationEvidence:
+    """Trusted adapter evidence of exact request success, not a bucket identity."""
+    request: BucketRequest
+    content_sha256: str
 
 
 def require_text(value, pattern):
@@ -60,3 +74,27 @@ def metadata(request):
     return {"deployment_epoch": request.epoch, "deployment_repository": str(request.scope.repository_id),
             "deployment_environment": request.scope.environment,
             "deployment_tenancy": request.scope.tenancy_id}
+
+
+def creation_body_v1(request):
+    """Stable wire bytes, matching the original pinned SDK model serialization.
+
+    Keep order and whitespace while any v1 intent may need reconciliation.
+    Namespace/principal/correlation are bound separately by the Audit matcher.
+    """
+    validate_request(request)
+    return json.dumps({
+        "name": request.name, "compartmentId": request.scope.compartment_id, "metadata": metadata(request),
+        "publicAccessType": "NoPublicAccess", "storageTier": "Standard", "objectEventsEnabled": False,
+        "versioning": "Disabled", "autoTiering": "Disabled", "bucketScope": "NAMESPACE",
+    }, ensure_ascii=True, allow_nan=False).encode("ascii")
+
+
+def creation_digest_v1(request):
+    return b64encode(sha256(creation_body_v1(request)).digest()).decode("ascii")
+
+
+def validate_creation_evidence(evidence):
+    if (type(evidence) is not BucketCreationEvidence or type(evidence.content_sha256) is not str
+            or evidence.content_sha256 != creation_digest_v1(evidence.request)):
+        raise ValueError("invalid_bucket_creation_evidence")
