@@ -3,10 +3,9 @@
 See an agent diagnose a checkout failure using real OCI logs and metrics,
 propose a repair, and verify recovery after your approval.
 
-**Status: in development.** GitHub bootstrap and fresh-runner reuse of the OCI
-recovery journal are live-tested. Interrupted-run recovery still needs hosted
-testing. Workload resources, Deploy, Verify and Destroy are not implemented.
-The demo is not runnable yet.
+**Status: in development.** GitHub bootstrap, fresh-runner reuse and recovery
+after a cancelled journal step are live-tested. Workload resources, Deploy,
+Verify and Destroy are not implemented. The demo is not runnable yet.
 
 ## Configure once
 
