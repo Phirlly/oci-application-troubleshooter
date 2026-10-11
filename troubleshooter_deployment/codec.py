@@ -4,7 +4,7 @@ from datetime import datetime
 import json
 import re
 
-from .records import Attempt, Generation, Identity, Operation, Receipt, Record, Resource, Scope
+from .records import Attempt, Generation, Identity, StackIdentity, Operation, Receipt, Record, Resource, Scope
 
 MAX_BYTES = 262144
 MAX_ITEMS = 256
@@ -77,10 +77,12 @@ def validate_attempt(attempt):
         raise RecordError() from None
 
 
-def _identity(value):
-    data = _fields(value, Identity)
-    return Identity(_scope(data["scope"]),
-                    _text(data["bucket_id"]), _text(data["epoch"], r"[0-9a-f]{32}"))
+def _identity(value, schema=1):
+    record_type = Identity if schema == 1 else StackIdentity
+    data = _fields(value, record_type)
+    return record_type(_scope(data["scope"]),
+                       _text(data["bucket_id" if schema == 1 else "stack_id"]),
+                       _text(data["epoch"], r"[0-9a-f]{32}"))
 
 
 def _resource(value):
@@ -140,9 +142,9 @@ def _operation(value):
     return operation
 
 
-def _receipt(value):
+def _receipt(value, schema=1):
     data = _fields(value, Receipt)
-    return Receipt(_identity(data["identity"]), _attempt(data["attempt"]),
+    return Receipt(_identity(data["identity"], schema), _attempt(data["attempt"]),
                    _text(data["removal_id"], r"[0-9a-f]{32}"),
                    tuple(_text(item, r"[0-9a-f]{32}") for item in _items(data["generation_ids"])))
 
@@ -186,11 +188,12 @@ def decode(body: bytes) -> Record:
     try:
         _require(type(body) is bytes and len(body) <= MAX_BYTES)
         data = _fields(json.loads(body, object_pairs_hook=_pairs), Record)
-        _require(type(data["schema"]) is int and data["schema"] == 1)
-        record = Record(_identity(data["identity"]), _attempt(data["owner"]),
+        _require(type(data["schema"]) is int and data["schema"] in (1, 2))
+        schema = data["schema"]
+        record = Record(_identity(data["identity"], schema), _attempt(data["owner"]),
                         tuple(_generation(item) for item in _items(data["generations"])),
                         tuple(_operation(item) for item in _items(data["operations"])),
-                        None if data["receipt"] is None else _receipt(data["receipt"]))
+                        None if data["receipt"] is None else _receipt(data["receipt"], schema), schema)
         _relations(record)
         return record
     except (ValueError, TypeError, KeyError, OverflowError, RecursionError):

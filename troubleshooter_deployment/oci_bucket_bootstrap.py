@@ -67,6 +67,9 @@ class OciBucketBootstrapStore:
         if (data["variables"].get(BOOTSTRAP_VARIABLE) != expected["variables"][BOOTSTRAP_VARIABLE]
                 or any(data["freeformTags"].get(k) != v for k, v in expected["freeformTags"].items())):
             raise BootstrapStoreError()
+        if any(k.startswith("troubleshooter_journal_")
+               for mapping in ("variables", "freeformTags") for k in data[mapping]):
+            raise BootstrapStoreError()
         record = read_bootstrap(anchor.request, anchor.stack_id, data["freeformTags"], data.get("definedTags", {}))
         revision = strong_etag(result.headers.get("etag"))
         if record is None or record.phase != "ready":

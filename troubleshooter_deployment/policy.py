@@ -2,7 +2,7 @@
 from dataclasses import replace
 
 from .codec import encode
-from .records import Attempt, Generation, Identity, Operation, OperationResult, Record, RunObservation
+from .records import Attempt, Generation, Identity, StackIdentity, Operation, OperationResult, Record, RunObservation
 
 
 class PolicyError(RuntimeError):
@@ -41,7 +41,7 @@ def require_open(record):
         raise PolicyError("purge_in_progress")
 
 
-def bootstrap(expected: Identity, creation_ack: Identity | None, owner: Attempt) -> Record:
+def bootstrap(expected: Identity | StackIdentity, creation_ack: Identity | StackIdentity | None, owner: Attempt) -> Record:
     """Only an exact, validated create acknowledgement can initialize ownership.
 
     A discovery/name/tag match cannot substitute. Lost create responses require
@@ -49,7 +49,7 @@ def bootstrap(expected: Identity, creation_ack: Identity | None, owner: Attempt)
     """
     if creation_ack is None or creation_ack != expected:
         raise PolicyError("ownership_unconfirmed")
-    return checked(Record(expected, owner))
+    return checked(Record(expected, owner, schema=2 if type(expected) is StackIdentity else 1))
 
 
 def begin_generation(record: Record, generation_id: str, release_sha: str) -> Record:

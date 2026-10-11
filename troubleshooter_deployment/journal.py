@@ -4,7 +4,7 @@ from typing import Protocol
 
 from .codec import decode, encode
 from .policy import PolicyError, bootstrap, claim, reserve, require_forward_transition
-from .records import Attempt, Identity, Record, RunObservation
+from .records import Attempt, Identity, StackIdentity, Record, RunObservation
 
 
 class WriteConflict(RuntimeError):
@@ -20,10 +20,10 @@ class WriteUncertain(RuntimeError):
 class ConditionalStore(Protocol):
     """Future adapter must distinguish confirmed absence from denied/failed reads.
 
-    read returns (opaque revision, bounded bytes), or confirmed object absence.
+    read returns (opaque revision, bounded bytes), or confirmed journal absence.
     write(None, body) is create-if-absent; other revisions require atomic CAS.
     A lost reply raises WriteUncertain even if the write may have succeeded.
-    The adapter must establish bucket identity and enforce transport bounds.
+    The adapter must establish storage identity and enforce transport bounds.
     """
 
     def read(self) -> tuple[str, bytes] | None: ...
@@ -42,12 +42,12 @@ def _revision_valid(value):
 
 
 class Journal:
-    def __init__(self, store: ConditionalStore, identity: Identity, owner: Attempt):
+    def __init__(self, store: ConditionalStore, identity: Identity | StackIdentity, owner: Attempt):
         self.store = store
         self.identity = identity
         self.owner = owner
 
-    def initialize(self, creation_ack: Identity | None) -> Snapshot:
+    def initialize(self, creation_ack: Identity | StackIdentity | None) -> Snapshot:
         record = bootstrap(self.identity, creation_ack, self.owner)
         revision = self.store.write(None, encode(record))
         if not _revision_valid(revision):

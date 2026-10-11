@@ -44,6 +44,13 @@ class Identity:
 
 
 @dataclass(frozen=True)
+class StackIdentity:
+    scope: Scope
+    stack_id: str
+    epoch: str
+
+
+@dataclass(frozen=True)
 class Resource:
     resource_id: str
     kind: str
@@ -73,7 +80,7 @@ class Operation:
 
 @dataclass(frozen=True)
 class Receipt:
-    identity: Identity
+    identity: Identity | StackIdentity
     attempt: Attempt
     removal_id: str
     generation_ids: tuple[str, ...]
@@ -81,7 +88,7 @@ class Receipt:
 
 @dataclass(frozen=True)
 class Record:
-    identity: Identity
+    identity: Identity | StackIdentity
     owner: Attempt
     generations: tuple[Generation, ...] = ()
     operations: tuple[Operation, ...] = ()
