@@ -4,8 +4,8 @@ from http.client import HTTPSConnection
 import json
 import re
 
-from .codec import MAX_BYTES, encode
-from .records import Record, RunObservation
+from .codec import MAX_BYTES, encode, validate_attempt
+from .records import Attempt, Record, RunObservation
 from .request_budget import operation_budget
 
 
@@ -39,16 +39,21 @@ class GitHubAttempts:
         self._token = token
 
     def observe(self, record: Record) -> RunObservation:
+        encode(record)
+        return self.observe_attempt(record.identity.scope.repository_id, record.owner)
+
+    def observe_attempt(self, repository_id: int, attempt: Attempt) -> RunObservation:
         """source_sha is the triggering commit, not an alternate checkout ref.
 
         GitHub does not return the caller workflow_sha. That field remains
         journal provenance; it is deliberately absent from this observation.
         """
-        encode(record)
-        attempt = record.owner
-        path = (f"/repos/{self._owner}/{self._repository}/actions/runs/"
-                f"{attempt.run_id}/attempts/{attempt.number}?exclude_pull_requests=true")
         try:
+            validate_attempt(attempt)
+            if type(repository_id) is not int or not 0 < repository_id < 2**63:
+                raise GitHubError()
+            path = (f"/repos/{self._owner}/{self._repository}/actions/runs/"
+                    f"{attempt.run_id}/attempts/{attempt.number}?exclude_pull_requests=true")
             with operation_budget(), ExitStack() as cleanup:
                 connection = HTTPSConnection("api.github.com", timeout=5)
                 cleanup.callback(connection.close)
@@ -70,7 +75,7 @@ class GitHubAttempts:
                 if len(body) > MAX_BYTES or (length is not None and len(body) != int(length)):
                     raise GitHubError()
                 data = json.loads(body, object_pairs_hook=_unique_pairs, parse_constant=_constant)
-                expected = (record.identity.scope.repository_id, attempt.run_id, attempt.number, attempt.source_sha)
+                expected = (repository_id, attempt.run_id, attempt.number, attempt.source_sha)
                 actual = (data["repository"]["id"], data["id"], data["run_attempt"], data["head_sha"])
                 if (any(type(value) is not int for value in actual[:3]) or type(actual[3]) is not str
                         or actual != expected or type(data["status"]) is not str

@@ -46,6 +46,17 @@ class GitHubAttemptTests(unittest.TestCase):
         response.close.assert_called_once()
         self.connection.close.assert_called_once()
 
+    def test_direct_attempt_lookup_needs_no_bucket_record(self):
+        self.response()
+        self.assertEqual(self.client.observe_attempt(42, ATTEMPT),
+                         RunObservation(42, 100, 1, ATTEMPT.source_sha, "completed"))
+        self.connection.request.reset_mock()
+        for repository_id, attempt in [(True, ATTEMPT), (0, ATTEMPT), (2**63, ATTEMPT),
+                                        (42, None), (42, replace(ATTEMPT, number=True))]:
+            with self.assertRaises(GitHubError):
+                self.client.observe_attempt(repository_id, attempt)
+        self.connection.request.assert_not_called()
+
     def test_wrong_or_missing_identity_and_malformed_status_are_rejected(self):
         variants = [dict(self.data, **{name: value}) for name, value in [
             ("id", 101), ("run_attempt", 2), ("run_attempt", True),
