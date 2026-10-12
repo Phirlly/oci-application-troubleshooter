@@ -24,6 +24,8 @@ VALUES = {
 def input_cases():
     yield VALUES, True
     for field, value in [
+        ("artifact_namespace", "acme-dev"),
+        ("artifact_namespace", "a" * 31 + "-" + "b" * 32),
         ("artifact_object", "a" * 255),
         ("presenter_secret_version", 2147483647),
         ("shape", "VM.Standard.E5.Flex"),
@@ -34,7 +36,11 @@ def input_cases():
         ("tenancy_ocid", "ocid1.compartment.oc1..synthetic"),
         ("home_region", "not-a-region"), ("availability_domain", "bad\n"),
         ("image_ocid", "latest"), ("shape", "VM.Standard.A1.Flex"),
-        ("artifact_namespace", "bad'namespace"), ("artifact_bucket", "UPPERCASE"),
+        ("artifact_namespace", "bad'namespace"), ("artifact_namespace", ""),
+        ("artifact_namespace", "a" * 65), ("artifact_namespace", "UPPERCASE"),
+        ("artifact_namespace", "bad/namespace"), ("artifact_namespace", "bad\n"),
+        ("artifact_namespace", "unicode-é"), ("artifact_namespace", None),
+        ("artifact_bucket", "UPPERCASE"),
         ("artifact_object", "bad'object"), ("artifact_object", "a" * 256),
         ("artifact_object", "unicode-é"), ("artifact_object", None),
         ("artifact_sha256", "c" * 63),

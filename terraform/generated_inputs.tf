@@ -29,7 +29,7 @@ variable "automation" {
       can(regex("^[A-Za-z0-9:-]{1,128}$", var.automation.availability_domain)),
       can(regex("^ocid1\\.image\\.oc1\\.[a-z0-9-]+\\.[A-Za-z0-9]+$", var.automation.image_ocid)),
       can(regex("^ocid1\\.vaultsecret\\.oc1\\.[a-z0-9-]+\\.[A-Za-z0-9]+$", var.automation.presenter_secret_ocid)),
-      can(regex("^[a-z0-9]{1,64}$", var.automation.artifact_namespace)),
+      can(regex("^[a-z0-9-]{1,64}$", var.automation.artifact_namespace)),
       can(regex("^[a-z0-9][a-z0-9-]{0,62}$", var.automation.artifact_bucket)),
       can(regex("^[a-z0-9][a-z0-9/_.-]{0,254}$", var.automation.artifact_object)),
       contains(["VM.Standard.E4.Flex", "VM.Standard.E5.Flex"], var.automation.shape),
