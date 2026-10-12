@@ -3,69 +3,38 @@
 See an agent diagnose a checkout failure using real OCI logs and metrics,
 propose a repair, and verify recovery after your approval.
 
-**Status: in development. No working Deploy to OCI button yet.** The current
-[Demo bootstrap (development only)](.github/workflows/demo.yml) workflow initializes
-or resumes deployment tracking. It does not deploy the application or provide
-a login URL.
+**Status: in development. No working Deploy to OCI button or runnable demo yet.**
+The login page, application package and Terraform foundation have automated
+checks. Direct Resource Manager deployment and the complete demo remain untested.
 
-**Next deliverable:** one GitHub **Deploy** workflow that provisions through
-OCI Resource Manager, configures and starts the application automatically,
-verifies login, and returns one URL. The complete troubleshooting demo follows;
-**Demo ready** will require the full incident-to-recovery check.
+## Planned deployment
 
-## Deployment prerequisites
+1. Select **Deploy to OCI** here to open **OCI Console → Resource Manager →
+   Create stack**, with the release package selected.
+2. Choose the region and compartment, review the configuration, and select
+   **Create** with **Run apply** enabled.
+3. Automation provisions and connects the application, permissions, storage and
+   synthetic telemetry. The target is one verified **Demo ready** URL.
 
-Use your own GitHub repository or a configured team repository. Supply:
+Credential setup is still being finalized. A successful Terraform Apply alone
+will not count as demo readiness. The button will be added after the actual
+deployment package passes end-to-end testing.
 
-- **OCI:** signing private key, user OCID, tenancy OCID, key fingerprint,
-  region and compartment, with permission to deploy.
-- **OpenAI:** an API key with the required Agents API and model access.
-- **Demo:** a presenter password.
+You will need OCI access, deployment permissions and an OpenAI API key with
+the required API/model access. GitHub hosts the source and release package;
+deployment starts in OCI. No repository fork, GitHub Secrets, local Terraform,
+Cloud Shell, SSH or manual service wiring is part of the intended setup.
 
-Keep region and compartment together using
-[deployment.tfvars.json.example](terraform/deployment.tfvars.json.example).
-Replace the compartment placeholder and save the JSON as `DEPLOYMENT_TFVARS_JSON`
-in GitHub's `demo` Environment. Store `OCI_TENANCY_OCID`, `OCI_USER_OCID`,
-`OCI_FINGERPRINT` and `OCI_PRIVATE_KEY` there separately. Restrict this environment
-to the reviewed `main` branch; remove same-name repository/organization secret
-fallbacks. Never commit actual configuration or put credentials in tfvars.
-Region availability and permissions require preflight.
+## Planned demonstration
 
-The development bootstrap workflow retains a Resource Manager stack for recovery
-metadata and reports `BOOTSTRAP_VERIFIED`, not demo readiness. It creates no
-workload. Retain its GitHub deployment history. Later reviewed releases can reuse
-an empty journal after the previous run finishes; populated journals require the
-same release. Missing journals or unconfirmed creation require the original
-release, and expired, unconfirmed creation remains pending. This workflow does
-not remove the retained stack or use OpenAI/presenter secrets.
+Open the URL and sign in:
+**Start incident → Investigate → Approve repair → See recovery evidence.**
 
-After setup, the intended experience uses only GitHub Actions and
-the demo page—no local Terraform, Cloud Shell, SSH or manual service wiring.
-
-## Planned deployment and demo experience
-
-1. Run **Deploy** in GitHub Actions. Automation provisions through OCI Resource
-   Manager and tests login and the complete demo before publishing **Demo ready**
-   and the URL.
-2. Open the URL, sign in and follow the guided flow:
-   **Start incident → Investigate → Approve repair → See recovery evidence.**
-   One page shows application health, the explanation and supporting evidence.
-3. Select **Reset demo** to prepare another presentation without redeploying.
-
-The included sample app generates its own telemetry. No customer data or manual
-data loading is needed. The agent cannot approve its own repair.
-
-| Action | Purpose |
-| --- | --- |
-| Verify — GitHub | Run the full readiness test before a meeting; refuse active or paused presentations. |
-| Destroy — GitHub | Remove owned resources, even if the app is unavailable; report pending cleanup. |
-
-## Costs and cleanup
+The sample app generates its own telemetry; no customer data or manual loading
+is needed. The agent cannot approve its own repair. **Verify** and **Reset demo**
+are planned inside the page; **Destroy** starts from the Resource Manager stack.
 
 OCI and model usage incur charges. Synthetic evidence is sent to OpenAI.
-Some OCI deletions take time; rerun **Destroy** to check or finish cleanup.
-
-For credential problems, update GitHub Secrets and rerun **Deploy** for an active
-demo, or **Destroy** if removal is underway.
+Cleanup must report unresolved resources and provider deletion delays.
 
 Licensed under [MIT](LICENSE).
