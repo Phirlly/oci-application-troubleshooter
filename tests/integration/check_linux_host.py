@@ -67,7 +67,8 @@ def systemd_check(scratch):
     result = subprocess.run(["systemd-analyze", "verify", "--man=no", str(bad), units[0]],
                             env=environment, capture_output=True, text=True, timeout=30)
     if not result.returncode or "cycle" not in result.stderr.lower():
-        raise RuntimeError("systemd negative fixture did not detect ordering cycle")
+        raise RuntimeError("systemd negative fixture did not detect ordering cycle: status="
+                           + str(result.returncode) + "\n" + result.stderr[-5000:])
 
 
 def storage_check(scratch):
