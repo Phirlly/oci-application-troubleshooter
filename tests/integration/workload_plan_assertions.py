@@ -1,4 +1,8 @@
 """Acceptance checks of real Terraform plan JSON and dependency graph."""
+import base64
+import gzip
+import json
+
 from workload_fixture import VALUES
 
 EXPECTED = {
@@ -23,7 +27,7 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
-def verify_plan(plan, graph):
+def verify_plan(plan, graph, metadata):
     resources = {r["address"]: r for r in plan["resource_changes"]}
     require(set(resources) == EXPECTED, "exact owned resource inventory")
     require(all(r["mode"] == "managed" and r["change"]["actions"] == ["create"]
@@ -51,7 +55,16 @@ def verify_plan(plan, graph):
     require(vm["source_details"][0]["source_id"] == VALUES["automation"]["image_ocid"], "frozen image")
     require(vm["instance_options"][0]["are_legacy_imds_endpoints_disabled"] is True, "IMDSv2 only")
     require(vm["create_vnic_details"][0]["assign_public_ip"] == "false", "private VNIC")
-    require(not any(key in vm.get("metadata", {}) for key in ("user_data", "ssh_authorized_keys")), "no unfinished startup")
+    reference("oci_core_instance.application", "metadata", "local.host_user_data")
+    require("ssh_authorized_keys" not in metadata, "no presenter SSH")
+    require(metadata["artifact_image_id"] == VALUES["automation"]["artifact_image_id"], "bound application image")
+    bootstrap = gzip.decompress(base64.b64decode(metadata["user_data"]))
+    require(bootstrap.startswith(b"#cloud-config\n"), "compressed cloud-init")
+    config = json.loads(bootstrap.split(b"\n", 1)[1])
+    require(any(item["path"] == "/opt/ocitroubleshooter/troubleshooter_host/__main__.py"
+                for item in config["write_files"]), "packaged host entrypoint")
+    bounded_metadata = {**metadata, "data_volume_ocid": "v" * 255, "public_origin": "h" * 255}
+    require(len(json.dumps(bounded_metadata, ensure_ascii=True)) <= 32000, "bounded merged metadata")
     require(value("oci_core_volume.application")["size_in_gbs"] == "50", "data allocation")
     attachment = value("oci_core_volume_attachment.application")
     require(attachment["device"] == "/dev/oracleoci/oraclevdb"

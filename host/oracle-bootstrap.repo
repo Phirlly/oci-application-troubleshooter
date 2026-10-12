@@ -1,0 +1,23 @@
+[troubleshooter_baseos]
+name=Oracle Linux 9 BaseOS
+baseurl=https://yum.oracle.com/repo/OracleLinux/OL9/baseos/latest/$basearch/
+enabled=1
+sslverify=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-oracle
+
+[troubleshooter_appstream]
+name=Oracle Linux 9 AppStream
+baseurl=https://yum.oracle.com/repo/OracleLinux/OL9/appstream/$basearch/
+enabled=1
+sslverify=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-oracle
+
+[troubleshooter_developer]
+name=Oracle Linux 9 Developer
+baseurl=https://yum.oracle.com/repo/OracleLinux/OL9/developer/$basearch/
+enabled=1
+sslverify=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-oracle

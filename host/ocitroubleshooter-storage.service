@@ -1,0 +1,13 @@
+[Unit]
+Description=Initialize the owned troubleshooter data volume
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/ocitroubleshooter
+Environment=PYTHONDONTWRITEBYTECODE=1
+UMask=0077
+ExecStart=/usr/bin/python3 -m troubleshooter_host storage
+TimeoutStartSec=2400

@@ -1,0 +1,10 @@
+[Unit]
+Description=Check for automated presenter credential rotation
+
+[Timer]
+OnBootSec=120
+OnUnitInactiveSec=60
+AccuracySec=5
+
+[Install]
+WantedBy=timers.target

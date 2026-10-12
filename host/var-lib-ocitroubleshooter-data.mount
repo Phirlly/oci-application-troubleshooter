@@ -1,0 +1,11 @@
+[Unit]
+Description=Dedicated troubleshooter application storage
+Requires=ocitroubleshooter-storage.service
+After=ocitroubleshooter-storage.service
+
+[Mount]
+What=/dev/oracleoci/oraclevdb
+Where=/var/lib/ocitroubleshooter/data
+Type=ext4
+Options=rw,nodev,nosuid,noexec,_netdev
+TimeoutSec=60

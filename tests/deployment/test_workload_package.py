@@ -1,12 +1,16 @@
 """Resource Manager packages include only reviewed source, reproducibly."""
 from hashlib import sha256
+import base64
+import gzip
 from io import BytesIO
+import json
 from pathlib import Path
 import tempfile
 import unittest
 from zipfile import ZipFile
 
 from troubleshooter_deployment.workload_package import build_workload_package, SOURCE_FILES
+from troubleshooter_deployment.host_startup import host_source_paths
 
 
 class WorkloadPackageTests(unittest.TestCase):
@@ -17,6 +21,10 @@ class WorkloadPackageTests(unittest.TestCase):
         (self.root / "terraform").mkdir()
         for name in SOURCE_FILES:
             self.source(name).write_bytes(("synthetic " + name).encode())
+        for name in host_source_paths():
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(("synthetic " + name).encode())
 
     def source(self, name):
         return self.root / ("LICENSE" if name == "LICENSE" else "terraform/" + name)
@@ -31,11 +39,15 @@ class WorkloadPackageTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(first.sha256, sha256(first.content).hexdigest())
         with ZipFile(BytesIO(first.content)) as archive:
-            self.assertEqual(archive.namelist(), sorted(SOURCE_FILES))
+            self.assertEqual(archive.namelist(), sorted((*SOURCE_FILES, "host_startup.tf.json")))
             for item in archive.infolist():
                 self.assertEqual(item.date_time, (2026, 1, 1, 0, 0, 0))
                 self.assertEqual(item.external_attr >> 16, 0o100644)
-                self.assertEqual(archive.read(item), self.source(item.filename).read_bytes())
+                if item.filename != "host_startup.tf.json":
+                    self.assertEqual(archive.read(item), self.source(item.filename).read_bytes())
+            startup = json.loads(archive.read("host_startup.tf.json"))["locals"]["host_user_data"]
+            config = json.loads(gzip.decompress(base64.b64decode(startup)).split(b"\n", 1)[1])
+            self.assertEqual(len(config["write_files"]), len(host_source_paths()))
 
     def test_missing_or_nonregular_source_fails_closed(self):
         source = self.source("variables.tf")
@@ -70,7 +82,20 @@ class WorkloadPackageTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[2]
         package = build_workload_package(root)
         with ZipFile(BytesIO(package.content)) as archive:
-            self.assertEqual(len(archive.namelist()), 11)
+            self.assertEqual(len(archive.namelist()), 12)
             self.assertIn(".terraform.lock.hcl", archive.namelist())
             self.assertIn("LICENSE", archive.namelist())
             self.assertNotIn("deployment.tfvars.json.example", archive.namelist())
+
+    def test_symlinked_host_source_or_parent_is_rejected(self):
+        source = self.root / "troubleshooter_host/inputs.py"
+        source.unlink()
+        source.symlink_to(self.root / "LICENSE")
+        with self.assertRaisesRegex(ValueError, "workload source"):
+            build_workload_package(self.root)
+        source.unlink()
+        source.write_bytes(b"synthetic")
+        (self.root / "troubleshooter_host").rename(self.root / "other")
+        (self.root / "troubleshooter_host").symlink_to(self.root / "other", target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "workload source"):
+            build_workload_package(self.root)

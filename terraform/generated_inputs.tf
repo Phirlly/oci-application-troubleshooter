@@ -15,6 +15,7 @@ variable "automation" {
     artifact_bucket          = string
     artifact_object          = string
     artifact_sha256          = string
+    artifact_image_id        = string
     presenter_secret_ocid    = string
     presenter_secret_version = number
   })
@@ -24,6 +25,7 @@ variable "automation" {
       can(regex("^[a-f0-9]{32}$", var.automation.generation_id)),
       can(regex("^[a-f0-9]{40}$", var.automation.release_sha)),
       can(regex("^[a-f0-9]{64}$", var.automation.artifact_sha256)),
+      can(regex("^sha256:[a-f0-9]{64}$", var.automation.artifact_image_id)),
       can(regex("^ocid1\\.tenancy\\.oc1\\.\\.[A-Za-z0-9]+$", var.automation.tenancy_ocid)),
       can(regex("^[a-z][a-z0-9]*(-[a-z0-9]+)+-[1-9][0-9]*$", var.automation.home_region)),
       can(regex("^[A-Za-z0-9:-]{1,128}$", var.automation.availability_domain)),

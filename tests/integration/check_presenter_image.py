@@ -2,6 +2,7 @@
 import argparse
 from http.cookies import SimpleCookie
 import json
+import os
 from pathlib import Path
 import re
 import signal
@@ -13,6 +14,7 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from troubleshooter_app.credentials import make_verifier
+from troubleshooter_host.runtime import restrictions
 
 PROBE = Path(__file__).with_name('presenter_image_probe.py').read_text()
 ORIGIN = 'https://demo.example.test'
@@ -94,7 +96,8 @@ def cleanup_owned(cidfiles):
         signal.pthread_sigmask(signal.SIG_SETMASK, previous)
 
 
-def verify(image):
+def verify(image, rootful=False):
+    require((os.geteuid() == 0) == rootful, 'explicit rootful execution')
     details = json.loads(podman('image', 'inspect', image).stdout)[0]
     require(details['Architecture'] == 'amd64' and details['Os'] == 'linux', 'image platform')
     require(details['Config']['User'] == '10001:10001', 'image user')
@@ -102,15 +105,23 @@ def verify(image):
     with tempfile.TemporaryDirectory(prefix='presenter-image-') as directory:
         root = Path(directory)
         runtime, data = root / 'runtime', root / 'data'
-        runtime.mkdir(mode=0o700)
+        runtime.mkdir(mode=0o750 if rootful else 0o700)
         data.mkdir(mode=0o700)
+        if rootful:
+            runtime.chmod(0o750)
+            os.chown(runtime, 0, 10001)
+            os.chown(data, 10001, 10001)
         (runtime / 'config.json').write_text(json.dumps({'public_origin': ORIGIN, 'release_sha': 'a' * 40}))
         (runtime / 'presenter.json').write_bytes(make_verifier(PASSWORD).to_bytes())
         for path in runtime.iterdir():
-            path.chmod(0o600)
+            path.chmod(0o440 if rootful else 0o600)
+            if rootful:
+                os.chown(path, 0, 10001)
         common = ['--pull=never', '--read-only', '--read-only-tmpfs=false', '--network=none',
                   '--cap-drop=ALL', '--security-opt=no-new-privileges',
                   '--userns=keep-id:uid=10001,gid=10001', '--volume', f'{runtime}:/run/demo:ro']
+        if rootful:
+            common = [*restrictions(), '--network=none', '--volume', f'{runtime}:/run/demo:ro,Z']
         cidfiles = [root / 'missing.cid', root / 'running.cid']
         try:
             missing = podman('run', '--rm', '--timeout', '45', '--cidfile', str(cidfiles[0]),
@@ -118,7 +129,7 @@ def verify(image):
             require(missing.returncode == 1 and STARTUP_ERROR in missing.stderr
                     and 'Traceback' not in missing.stderr and not missing.stdout, 'missing mount rejection')
             podman('run', '--detach', '--timeout', '180', '--cidfile', str(cidfiles[1]),
-                   *common, '--volume', f'{data}:/data:rw', image)
+                   *common, '--volume', f'{data}:/data:rw' + (',Z' if rootful else ''), image)
             container = cidfiles[1].read_text().strip()
             require(re.fullmatch(r'[a-f0-9]{64}', container), 'created container identity')
             ready(container)
@@ -144,7 +155,9 @@ def verify(image):
             podman('stop', '--time', '10', container)
             replacement = runtime / 'presenter.pending'
             replacement.write_bytes(make_verifier(PASSWORD + '-rotated').to_bytes())
-            replacement.chmod(0o600)
+            replacement.chmod(0o440 if rootful else 0o600)
+            if rootful:
+                os.chown(replacement, 0, 10001)
             replacement.replace(runtime / 'presenter.json')
             podman('start', container)
             ready(container)
@@ -166,6 +179,7 @@ def interrupted(_signum, _frame):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--image-id-file', required=True, type=Path)
+    parser.add_argument('--rootful', action='store_true', help='Use production rootful permissions and container restrictions.')
     options = parser.parse_args()
     image = options.image_id_file.read_text().strip()
     require(re.fullmatch(r'sha256:[a-f0-9]{64}', image), 'built image identity')
@@ -173,7 +187,7 @@ def main():
         signal.signal(number, interrupted)
     signal.alarm(240)
     try:
-        verify(image)
+        verify(image, options.rootful)
     finally:
         signal.alarm(0)
     print('Image startup, assets, isolation, session restart, rotation and cleanup passed.')

@@ -1,0 +1,11 @@
+[Unit]
+Description=Check presenter credential version
+After=ocitroubleshooter.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ocitroubleshooter
+Environment=PYTHONDONTWRITEBYTECODE=1
+UMask=0077
+ExecStart=/usr/bin/python3 -m troubleshooter_host reconcile
+TimeoutStartSec=45

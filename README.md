@@ -5,8 +5,8 @@ propose a repair, and verify recovery after your approval.
 
 **Status: in development.** GitHub bootstrap, fresh-runner reuse and recovery
 after a cancelled journal step are live-tested. The packaged login page passes
-browser and container checks. Terraform resource definitions pass offline
-validation. Automatic host startup, Deploy, Verify and Destroy remain unfinished.
+browser and container checks. The Resource Manager package now includes automatic
+host setup; live OCI startup is unverified. Deploy, Verify and Destroy remain unfinished.
 The demo is not runnable yet.
 
 ## Configure once

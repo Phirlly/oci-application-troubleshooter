@@ -33,8 +33,8 @@ IMAGES = {
 }
 
 
-def podman(*arguments, timeout=45, succeeds=True):
-    result = subprocess.run(["podman", *arguments], stdin=subprocess.DEVNULL,
+def podman(*arguments, timeout=45, succeeds=True, stdin=None):
+    result = subprocess.run(["podman", *arguments], input=stdin,
                             capture_output=True, text=True, timeout=timeout)
     require((result.returncode == 0) == succeeds,
             "Podman/Terraform check failed:\n" + result.stdout[-12000:] + result.stderr[-12000:])
@@ -157,7 +157,13 @@ def verify(provider_directory, pull_image):
             terraform("plan", "-input=false", "-refresh=false", "-lock=false", "-no-color",
                       "-var-file=synthetic.tfvars.json", "-out=/tmp/workload.plan")
             plan = json.loads(terraform("show", "-json", "/tmp/workload.plan"))
-            verify_plan(plan, graph)
+            expression = ('jsonencode(merge(local.host_metadata, {public_origin="https://synthetic.example.test",'
+                          'data_volume_ocid="ocid1.volume.oc1.iad.synthetic",user_data=local.host_user_data}))\n')
+            metadata = json.loads(json.loads(podman("exec", "--interactive", identity, "terraform",
+                                                 "-chdir=/check/source", "console", "-no-color",
+                                                 "-state=/tmp/synthetic-console.tfstate",
+                                                 "-var-file=synthetic.tfvars.json", stdin=expression)))
+            verify_plan(plan, graph, metadata)
             print(f"PASS: Terraform1.5.7/OCI9.8.0 {architecture}; {len(cases)} input cases, "
                   f"22-resource plan/graph, ZIP {package.sha256}; no OCI network or apply.")
         finally:

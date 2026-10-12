@@ -113,7 +113,19 @@
           "id": "python_checks",
           "name": "Test Python behavior and coverage",
           "timeout-minutes": 5,
-          "run": ".venv/bin/coverage run -m unittest discover -s tests\n.venv/bin/coverage report --fail-under=98\n.venv/bin/python -m compileall -q troubleshooter_deployment troubleshooter_app tests"
+          "run": ".venv/bin/coverage run -m unittest discover -s tests\n.venv/bin/coverage report --fail-under=98\n.venv/bin/python -m compileall -q troubleshooter_deployment troubleshooter_app troubleshooter_host tests"
+        },
+        {
+          "id": "host_python",
+          "name": "Execute host contracts on Python 3.9",
+          "timeout-minutes": 3,
+          "run": "uv python install 3.9.25\nuv run --no-project --python 3.9.25 python -m unittest discover -s tests/host"
+        },
+        {
+          "id": "host_linux",
+          "name": "Check Linux mount and firewall contracts in isolated fixtures",
+          "timeout-minutes": 5,
+          "run": "sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=30 update\nsudo apt-get -y --no-install-recommends install nftables\nsudo .venv/bin/python tests/integration/check_linux_host.py"
         },
         {
           "id": "python_audit",
@@ -160,13 +172,13 @@
           "id": "image_build",
           "name": "Build actual application image with Podman",
           "timeout-minutes": 8,
-          "run": "podman build --platform linux/amd64 --no-cache --iidfile .cache/presenter-image.id --file Containerfile ."
+          "run": "sudo podman build --platform linux/amd64 --no-cache --iidfile .cache/presenter-image.id --file Containerfile ."
         },
         {
           "id": "image_smoke",
           "name": "Verify isolated image startup and persistent sessions",
           "timeout-minutes": 5,
-          "run": ".venv/bin/python tests/integration/check_presenter_image.py --image-id-file .cache/presenter-image.id"
+          "run": "sudo .venv/bin/python tests/integration/check_presenter_image.py --rootful --image-id-file .cache/presenter-image.id"
         },
         {
           "id": "unchanged_inputs",

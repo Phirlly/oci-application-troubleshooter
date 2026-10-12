@@ -10,6 +10,7 @@ locals {
     artifact_bucket          = var.automation.artifact_bucket
     artifact_object          = var.automation.artifact_object
     artifact_sha256          = var.automation.artifact_sha256
+    artifact_image_id        = var.automation.artifact_image_id
     presenter_secret_ocid    = var.automation.presenter_secret_ocid
     presenter_secret_version = tostring(var.automation.presenter_secret_version)
   }
@@ -30,10 +31,10 @@ resource "oci_core_instance" "application" {
   display_name        = local.name
   freeform_tags       = local.tags
   # Development graph: provider launches first, then requests STOP.
-  # Do not dispatch until the host bootstrap is implemented and verified.
+  # Do not dispatch until host startup passes the selected OCI guest proof.
   state                = "STOPPED"
   preserve_boot_volume = false
-  metadata             = local.host_metadata
+  metadata             = merge(local.host_metadata, { user_data = local.host_user_data })
 
   shape_config {
     ocpus         = 1
@@ -57,7 +58,7 @@ resource "oci_core_instance" "application" {
       condition = length(local.host_metadata) <= 128 && alltrue([
         for key, value in local.host_metadata :
         length(key) <= 255 && length(value) <= 255 && can(regex("^[ -~]*$", value))
-      ]) && length(jsonencode(local.host_metadata)) <= 32000
+      ]) && length(jsonencode(merge(local.host_metadata, { user_data = local.host_user_data }))) <= 32000
       error_message = "Rendered host metadata exceeds the allowed ASCII field or aggregate limits."
     }
   }

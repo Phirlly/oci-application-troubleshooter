@@ -79,7 +79,10 @@ class PackageWorkflowTests(unittest.TestCase):
         self.assertEqual(steps['browser_tests']['run'], 'npm run test:browser -- --forbid-only --global-timeout=180000')
         for name in ('frontend_dependencies', 'frontend_build', 'frontend_audit', 'browser_install', 'browser_tests'):
             self.assertEqual(steps[name]['working-directory'], 'frontend')
-        self.assertEqual(steps['image_build']['run'], 'podman build --platform linux/amd64 --no-cache --iidfile .cache/presenter-image.id --file Containerfile .')
-        self.assertEqual(steps['image_smoke']['run'], '.venv/bin/python tests/integration/check_presenter_image.py --image-id-file .cache/presenter-image.id')
+        self.assertEqual(steps['image_build']['run'], 'sudo podman build --platform linux/amd64 --no-cache --iidfile .cache/presenter-image.id --file Containerfile .')
+        self.assertEqual(steps['image_smoke']['run'], 'sudo .venv/bin/python tests/integration/check_presenter_image.py --rootful --image-id-file .cache/presenter-image.id')
+        self.assertEqual(steps['host_python']['run'], 'uv python install 3.9.25\nuv run --no-project --python 3.9.25 python -m unittest discover -s tests/host')
+        self.assertEqual(steps['host_linux']['run'], 'sudo apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=30 update\nsudo apt-get -y --no-install-recommends install nftables\nsudo .venv/bin/python tests/integration/check_linux_host.py')
+        self.assertIn('troubleshooter_host', steps['python_checks']['run'])
         self.assertEqual(steps['unchanged_inputs']['run'], 'git diff --exit-code -- pyproject.toml uv.lock frontend/package.json frontend/package-lock.json')
         self.assertFalse((ROOT / '.github/workflows/frontend-lock.yml').exists())
