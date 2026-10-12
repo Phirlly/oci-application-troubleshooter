@@ -106,6 +106,7 @@ def storage_check(scratch):
         with patch.object(volume, "inspect", return_value=disk):
             volume.check(disk)
             volume.check(disk, replay=True)
+            volume.check(disk)
         run(["mount", "--options", "rw,nodev,nosuid,noexec", device, str(mount)])
         with patch.object(linux_volume, "MOUNT", str(mount)):
             volume.verify_mount(disk, inputs.filesystem_uuid)

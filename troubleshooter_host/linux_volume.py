@@ -112,7 +112,7 @@ class LinuxVolume:
 
     def check(self, disk, replay=False):
         require(self.inspect() == disk and not disk.mounts)
-        command(["e2fsck"] + (["-E", "journal_only"] if replay else ["-n"]) + [disk.device], timeout=300)
+        command(["e2fsck"] + (["-p", "-E", "journal_only"] if replay else ["-n"]) + [disk.device], timeout=300)
 
     def verify_mount(self, disk, expected_uuid):
         result = json.loads(command(["findmnt", "--json", "--mountpoint", MOUNT,

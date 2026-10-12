@@ -119,7 +119,7 @@ class LinuxVolumeTests(unittest.TestCase):
             self.assertEqual(argv[-1], "/dev/sdb")
             self.assertIn(self.inputs.filesystem_uuid, argv)
             volume.check(self.disk, replay=True)
-            self.assertEqual(run.call_args.args[0], ["e2fsck", "-E", "journal_only", "/dev/sdb"])
+            self.assertEqual(run.call_args.args[0], ["e2fsck", "-p", "-E", "journal_only", "/dev/sdb"])
             volume.check(self.disk)
             self.assertEqual(run.call_args.args[0], ["e2fsck", "-n", "/dev/sdb"])
         with patch.object(volume, "inspect", side_effect=HostError("changed")), patch(
