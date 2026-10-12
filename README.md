@@ -3,13 +3,17 @@
 See an agent diagnose a checkout failure using real OCI logs and metrics,
 propose a repair, and verify recovery after your approval.
 
-**Status: in development.** GitHub bootstrap, fresh-runner reuse and recovery
-after a cancelled journal step are live-tested. The packaged login page passes
-browser and container checks. The Resource Manager package now includes automatic
-host setup; live OCI startup is unverified. Deploy, Verify and Destroy remain unfinished.
-The demo is not runnable yet.
+**Status: in development. No working Deploy to OCI button yet.** The current
+[Demo bootstrap (development only)](.github/workflows/demo.yml) workflow initializes
+or resumes deployment tracking. It does not deploy the application or provide
+a login URL.
 
-## Configure once
+**Next deliverable:** one GitHub **Deploy** workflow that provisions through
+OCI Resource Manager, configures and starts the application automatically,
+verifies login, and returns one URL. The complete troubleshooting demo follows;
+**Demo ready** will require the full incident-to-recovery check.
+
+## Deployment prerequisites
 
 Use your own GitHub repository or a configured team repository. Supply:
 
@@ -38,7 +42,7 @@ not remove the retained stack or use OpenAI/presenter secrets.
 After setup, the intended experience uses only GitHub Actions and
 the demo page—no local Terraform, Cloud Shell, SSH or manual service wiring.
 
-## Deploy and demonstrate
+## Planned deployment and demo experience
 
 1. Run **Deploy** in GitHub Actions. Automation provisions through OCI Resource
    Manager and tests login and the complete demo before publishing **Demo ready**
