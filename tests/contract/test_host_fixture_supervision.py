@@ -9,7 +9,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from tests.integration.check_linux_host import run
+from tests.integration.check_linux_host import run, systemd_check
 
 
 class HostFixtureSupervisionTests(unittest.TestCase):
@@ -34,9 +34,44 @@ class HostFixtureSupervisionTests(unittest.TestCase):
             signal.signal(signal.SIGTERM, previous)
 
     def test_success_and_failure_capture_only_owned_process_output(self):
-        self.assertEqual(run([sys.executable, "-c", "print('synthetic')"]), "synthetic\n")
+        result = run([sys.executable, "-c", "import sys; print('synthetic'); print('diagnostic', file=sys.stderr)"])
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "synthetic\n", "diagnostic\n"))
         with self.assertRaises(RuntimeError):
             run([sys.executable, "-c", "raise SystemExit(2)"])
+        result = run([sys.executable, "-c", "raise SystemExit(2)"], check=False)
+        self.assertEqual(result.returncode, 2)
+
+    def test_systemd_accepts_only_clean_units_and_expected_negative_cycle(self):
+        cycle = ("ocitroubleshooter-storage.service: Found ordering cycle on local-fs.target/start\n"
+                 "ocitroubleshooter-storage.service: Found dependency on var-lib-ocitroubleshooter-data.mount/start\n")
+        clean = subprocess.CompletedProcess([], 0, "", "")
+        for status in (0, 1):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as name:
+                negative = subprocess.CompletedProcess([], status, "", cycle)
+                with patch("tests.integration.check_linux_host.run", side_effect=[clean, negative]) as command:
+                    systemd_check(Path(name))
+                calls = command.call_args_list
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(calls[0].kwargs["env"]["LC_ALL"], "C")
+                self.assertFalse(calls[1].kwargs["check"])
+                self.assertNotIn("_netdev", (Path(name) / "var-lib-ocitroubleshooter-data.mount").read_text())
+
+    def test_systemd_rejects_zero_exit_cycle_for_actual_units(self):
+        result = subprocess.CompletedProcess([], 0, "", "synthetic.service: Found ordering cycle on basic.target/start")
+        with tempfile.TemporaryDirectory() as name:
+            with patch("tests.integration.check_linux_host.run", return_value=result) as command:
+                with self.assertRaisesRegex(RuntimeError, "actual units.*ordering cycle"):
+                    systemd_check(Path(name))
+            self.assertEqual(command.call_count, 1)
+
+    def test_systemd_rejects_unrelated_negative_diagnostics(self):
+        clean = subprocess.CompletedProcess([], 0, "", "")
+        for status, diagnostic in ((0, ""), (1, "Failed to load unit"),
+                                   (0, "unrelated.service: Found ordering cycle on basic.target/start")):
+            with self.subTest(diagnostic=diagnostic), tempfile.TemporaryDirectory() as name:
+                with patch("tests.integration.check_linux_host.run", side_effect=[clean, subprocess.CompletedProcess([], status, "", diagnostic)]):
+                    with self.assertRaisesRegex(RuntimeError, "negative fixture"):
+                        systemd_check(Path(name))
 
     def test_timeout_kills_descendant_even_after_leader_exits(self):
         with tempfile.TemporaryDirectory() as name:

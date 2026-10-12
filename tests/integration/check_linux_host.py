@@ -27,7 +27,7 @@ from tests.host.test_inputs import metadata
 INTERRUPTIONS = {signal.SIGALRM, signal.SIGINT, signal.SIGTERM}
 
 
-def run(argv, *, timeout=240, **kwargs):
+def run(argv, *, timeout=240, check=True, **kwargs):
     process = None
     previous = signal.pthread_sigmask(signal.SIG_BLOCK, INTERRUPTIONS)
     try:
@@ -36,9 +36,9 @@ def run(argv, *, timeout=240, **kwargs):
                                    preexec_fn=lambda: signal.pthread_sigmask(signal.SIG_SETMASK, previous), **kwargs)
         signal.pthread_sigmask(signal.SIG_SETMASK, previous)
         output, errors = process.communicate(timeout=timeout)
-        if process.returncode:
+        if check and process.returncode:
             raise RuntimeError("Linux fixture failed: " + argv[0] + "\n" + errors[-5000:])
-        return output
+        return subprocess.CompletedProcess(argv, process.returncode, output, errors)
     finally:
         # The namespace probe owns descendants; cancellation must reap the
         # whole group even if its leader exits before its synthetic server.
@@ -58,15 +58,19 @@ def run(argv, *, timeout=240, **kwargs):
 
 def systemd_check(scratch):
     units = [str(ROOT / "host" / name) for name in HOST_UNITS if not name.endswith(".conf")]
-    environment = {**os.environ, "SYSTEMD_UNIT_PATH": str(ROOT / "host") + ":"}
-    run(["systemd-analyze", "verify", "--man=no", *units], env=environment)
+    environment = {**os.environ, "LC_ALL": "C", "SYSTEMD_UNIT_PATH": str(ROOT / "host") + ":"}
+    result = run(["systemd-analyze", "verify", "--man=no", *units], env=environment, timeout=30)
+    if "ordering cycle" in result.stderr.lower():
+        raise RuntimeError("systemd actual units contain an ordering cycle:\n" + result.stderr[-5000:])
     # Prove the checker detects the concrete pre-fix default-ordering cycle.
     bad = scratch / "var-lib-ocitroubleshooter-data.mount"
     bad.write_text((ROOT / "host" / bad.name).read_text().replace(",_netdev", ""))
     environment["SYSTEMD_UNIT_PATH"] = str(scratch) + ":" + str(ROOT / "host") + ":"
-    result = subprocess.run(["systemd-analyze", "verify", "--man=no", str(bad), units[0]],
-                            env=environment, capture_output=True, text=True, timeout=30)
-    if not result.returncode or "cycle" not in result.stderr.lower():
+    result = run(["systemd-analyze", "verify", "--man=no", str(bad), units[0]],
+                 env=environment, check=False, timeout=30)
+    # systemd may break a cycle by dropping a nonessential job and exit0.
+    expected = ("Found ordering cycle", "ocitroubleshooter-storage.service", bad.name)
+    if not all(message in result.stderr for message in expected):
         raise RuntimeError("systemd negative fixture did not detect ordering cycle: status="
                            + str(result.returncode) + "\n" + result.stderr[-5000:])
 
@@ -79,12 +83,12 @@ def storage_check(scratch):
     try:
         previous = signal.pthread_sigmask(signal.SIG_BLOCK, INTERRUPTIONS)
         try:
-            device = run(["losetup", "--find", "--show", str(backing)]).strip()
+            device = run(["losetup", "--find", "--show", str(backing)]).stdout.strip()
             if not re.fullmatch(r"/dev/loop[0-9]+", device):
                 raise RuntimeError("owned loop identity")
         finally:
             signal.pthread_sigmask(signal.SIG_SETMASK, previous)
-        require_size = int(run(["blockdev", "--getsize64", device]).strip())
+        require_size = int(run(["blockdev", "--getsize64", device]).stdout.strip())
         if require_size != SIZE:
             raise RuntimeError("owned loop size")
         inputs = HostInputs.from_imds(metadata())
@@ -95,7 +99,7 @@ def storage_check(scratch):
         with patch.object(volume, "inspect", return_value=disk):
             volume.require_zero(disk)
             volume.format(disk, inputs.filesystem_uuid)
-        signatures = json.loads(run(["wipefs", "--no-act", "--json", "--output", "TYPE,UUID", device]))["signatures"]
+        signatures = json.loads(run(["wipefs", "--no-act", "--json", "--output", "TYPE,UUID", device]).stdout)["signatures"]
         if signatures != [{"type": "ext4", "uuid": inputs.filesystem_uuid}]:
             raise RuntimeError("created filesystem identity")
         disk = replace(disk, filesystem="ext4", uuid=inputs.filesystem_uuid, signatures=("ext4",))
@@ -116,10 +120,10 @@ def storage_check(scratch):
         try:
             # Query the exact backing path even if allocation/mount replies
             # were interrupted. Never detach a discovered unrelated device.
-            loops = json.loads(run(["losetup", "--json", "--list", "--output", "NAME,BACK-FILE"]))["loopdevices"]
+            loops = json.loads(run(["losetup", "--json", "--list", "--output", "NAME,BACK-FILE"]).stdout)["loopdevices"]
             owned = [item["name"] for item in loops if item["back-file"] == str(backing)]
             if os.path.ismount(mount):
-                source = json.loads(run(["findmnt", "--json", "--mountpoint", str(mount), "--output", "SOURCE"]))["filesystems"]
+                source = json.loads(run(["findmnt", "--json", "--mountpoint", str(mount), "--output", "SOURCE"]).stdout)["filesystems"]
                 if len(source) != 1 or source[0]["source"] not in owned:
                     raise RuntimeError("Refusing unknown fixture mount")
                 run(["umount", str(mount)])
